@@ -1,6 +1,6 @@
 # Vulcan Decision Guard 架构草案
 
-> 状态：草案，尚未实现。宿主能力以各宿主官方文档为准，标注“待调查”的条目在实现前必须先验证。
+> 状态：第一版骨架（仅 dsh），判定后端尚未实现。宿主能力以各宿主官方文档为准，标注“待调查”的条目在实现前必须先验证。
 
 ## 一、定位
 
@@ -37,20 +37,41 @@ DeepSeek harness 等）提供工具调用权限守卫。它拥有自己的账号
 
 ## 四、进程结构
 
-宿主的 `command` hook 每次工具调用都会启动新进程，本机模型不能在其中加载。因此可执行文件
-`vulcan-decision` 提供两类子命令：
+判定不能在每次工具调用时冷启动：本机模型加载需要数秒，云端连接也需要握手。因此判定由每个用户
+唯一的常驻进程 `vulcan-decision serve` 承担，所有宿主插件共用它。
 
-- `serve`：常驻进程，持有已加载的模型与账号会话，经本机 named pipe / Unix socket 提供判定。
-- `hook <host>`：hook 实际调用的轻量客户端。读取宿主 stdin JSON，转交 `serve`，再按宿主格式输出结论；
-  找不到 `serve` 时自动拉起；任何失败输出拒绝。
-- `login` / `logout` / `status`：OpenVulcan 账号（OAuth）。令牌存入系统钥匙串，不写入日志、错误或命令输出。
-- `model list|use|install|verify`：完整版的模型包管理。
+- **端点**：Windows 为 named pipe `\\.\pipe\vulcan-decision-<用户名>.sock`，Unix 为
+  `~/.vulcan-decision/run/serve.sock`（目录权限 0700）。端点位置只在 `decision-core::endpoint_path`
+  定义一次，其他语言通过 `vulcan-decision endpoint` 读取，不自行拼接。
+- **协议**：每行一个 JSON 帧（上限 16 MiB），每个请求携带 `contract` 版本；版本不一致时服务返回
+  `contract_mismatch`。`ensure` 发现旧版服务时先请求其退出，再启动当前版本。
+- **单例**：`serve.lock` 文件锁保证同一用户只有一个服务进程。
+- **生命周期**：无连接且空闲 30 分钟后退出。宿主插件运行期间保持一条 keepalive 连接，因此服务
+  不会在宿主运行时退出；keepalive 断开时插件在下一次判定前重新拉起服务。
+- **启动**：`ensure` 以完全脱离的方式启动 `serve`（Windows 还会取消标准句柄继承，否则读取 `ensure`
+  输出的宿主会一直等到服务退出）。
 
-云端精简版的 `serve` 只持有账号会话与连接，不加载模型。
+子命令：
+
+| 子命令 | 作用 |
+| --- | --- |
+| `serve` | 常驻判定服务 |
+| `ensure` | 确保当前版本的服务在运行，必要时启动；失败返回非零 |
+| `endpoint` | 输出 `{"endpoint","contract","version"}` |
+| `status` / `stop` | 查询与停止服务 |
+| `login` / `logout`（规划） | OpenVulcan 账号（OAuth）；令牌不写入日志、错误或命令输出 |
+| `model list\|use\|install\|verify`（规划） | 完整版的模型包管理 |
+
+实测（Windows，空判定）：插件首次 `ensure` + `endpoint` + keepalive 约 140 ms，只发生一次；之后每次
+判定在宿主进程内约 0.2 ms（p95 0.4 ms）。云端精简版的 `serve` 只持有账号会话与连接，不加载模型。
+
+当前尚无判定后端，服务对每个调用都返回拒绝。
 
 ## 五、宿主适配
 
-每个宿主的能力不同，适配层负责把同一个判定结论映射为该宿主能执行的行为。
+每个宿主的能力不同，适配层负责把同一个判定结论映射为该宿主能执行的行为。**第一版只适配 dsh**；
+Claude Code 与 Codex 的调查结论保留在下表供后续阶段参考，两者需要每次调用启动的 hook 客户端，
+届时再加入。
 
 | 能力 | DeepSeek harness（dsh，第一个适配） | Claude Code | Codex |
 | --- | --- | --- | --- |
@@ -59,7 +80,7 @@ DeepSeek harness 等）提供工具调用权限守卫。它拥有自己的账号
 | 询问用户 | 支持：`ask` 经 `ctx.approval`，只有 `allowed-once` 放行 | 支持 | 不支持 |
 | 复核 LLM | 可经 `ctx.llm.stream` 直接使用当前 agent 的 provider 与模型 | 自有配置；可评估宿主 `prompt` hook | 必须自有配置与自定义复核标准，因为没有用户兜底 |
 | 控制界面与登录 | 宿主内：设置页分节、UI slot、`dsh-authorization` 登录 flow | 命令行 | 命令行 |
-| 进程模型 | 插件常驻宿主进程，在 effect 生命周期内管理 `serve`，无每次冷启动 | 每次调用启动 `hook` 客户端 | 每次调用启动 `hook` 客户端 |
+| 进程模型 | 插件常驻宿主进程，在 effect 生命周期内管理 `serve`，无每次冷启动 | 每次调用启动 hook 客户端（后续阶段） | 每次调用启动 hook 客户端（后续阶段） |
 | 失败语义 | 插件抛错或返回 `deny` 均不执行；审批无应答为 `unavailable`，即拒绝 | `command`/`http` 必须设 `onFailure: "block"`；`mcp_tool` 失败时放行，不得用作闸门 | hook 超时语义待实测 |
 
 结论映射：
@@ -104,29 +125,69 @@ DeepSeek harness 等）提供工具调用权限守卫。它拥有自己的账号
 - **自动预设方式的卸载与切换**：参照 Auto review：先停止接收，把仍处于 `auto` 的会话迁回配置预设，
   再撤回注册。
 
-## 六、仓库结构（规划）
+## 六、仓库结构
 
 ```
 crates/
-  decision-core/     判定协议、调用渲染、结论映射、失败语义（两版共用）
-  decision-cloud/    OpenVulcan 账号与 OAuth、云端判定客户端
-  decision-local/    ONNX 推理、模型包校验、设备探测（仅完整版）
-  decision-cli/      vulcan-decision 可执行文件
-hosts/
-  claude-code/       插件清单与 hooks 配置
-  codex/             插件与 hooks 配置
-  dsh/               DeepSeek harness 插件（Cordis 服务端插件 + client 模块）
-npm/                 启动脚本与各平台二进制包
+  decision-core/        协议、帧格式、端点位置（所有组件共用）
+  decision-cli/         vulcan-decision 可执行文件：serve / ensure / endpoint / status / stop
+  decision-cloud/       （规划）OpenVulcan 账号与 OAuth、云端判定客户端
+  decision-local/       （规划）ONNX 推理、模型包校验、设备探测（仅完整版）
+packages/
+  dsh-decision-guard/   dsh 插件 @openvulcan/dsh-decision-guard（Cordis 插件 + cordis.patch.yml）
+scripts/
+  stage-native.mjs      生成各平台 npm 包
 docs/
 ```
 
-npm 采用平台子包分发预编译二进制（`optionalDependencies` + `os`/`cpu`），不使用 `postinstall` 下载。
-模型权重与 CUDA 执行库不进入 npm 包。
+一个仓库同时容纳两类产物：
 
-## 七、待决定与待调查
+- **宿主插件**（`packages/<宿主>-decision-guard`）：只含宿主适配逻辑，体积小，按宿主的插件机制安装。
+- **原生服务**（`vulcan-decision`）：所有宿主共用的常驻判定服务，以平台 npm 包分发，由宿主插件的
+  `optionalDependencies` 引入。后续加入的宿主插件引用同一组平台包，不重复打包。
+
+## 七、发布与安装
+
+平台包的集合只定义一次：dsh 插件 `package.json` 的 `optionalDependencies`
+（`@openvulcan/vulcan-decision-<os>-<cpu>`，os/cpu 采用 Node 的 `process.platform` / `process.arch`）。
+`scripts/stage-native.mjs` 只维护它们到 Rust target 的映射，两边不一致时拒绝执行。
+
+| 平台包 | Rust target |
+| --- | --- |
+| `win32-x64` | `x86_64-pc-windows-msvc` |
+| `linux-x64` | `x86_64-unknown-linux-gnu` |
+| `linux-arm64` | `aarch64-unknown-linux-gnu` |
+| `darwin-arm64` | `aarch64-apple-darwin` |
+| `darwin-x64` | `x86_64-apple-darwin` |
+
+发布顺序：
+
+1. 各平台执行 `cargo build --release --target <triple>`。
+2. `node scripts/stage-native.mjs` 在 `dist/npm/` 生成平台包：`bin/vulcan-decision[.exe]` 与带
+   `os`/`cpu`（Linux 另加 `libc: glibc`）的 `package.json`。脚本校验 Cargo 工作区版本、插件版本与
+   平台包依赖版本三者相同，任一缺少构建即失败。
+3. 先发布全部平台包，再发布 `@openvulcan/dsh-decision-guard`；否则用户安装插件时会解析不到平台包。
+
+安装：
+
+```
+dsh plugin add @openvulcan/dsh-decision-guard
+```
+
+`dsh plugin add` 在 profile 内通过 pnpm 安装，pnpm 依据 `os`/`cpu` 只下载当前机器的平台包；插件也可
+列入 dsh 插件市场的 JSON 索引。插件声明 `engines.dsh`（当前 `>=0.2.1-rc.2 <0.3.0`），dsh 包一律作为
+peer 依赖。插件加载时按 `@openvulcan/vulcan-decision-<platform>-<arch>/package.json` 解析执行文件，
+没有当前平台的构建时不阻止插件加载，而是让每次判定失败即拒绝。开发时可用环境变量
+`VULCAN_DECISION_BIN` 指向本地构建。
+
+不使用 `postinstall` 下载；模型权重与 CUDA 执行库不进入 npm 包。
+
+## 八、待决定与待调查
 
 1. 云端精简版与完整版是两个 npm 包，还是同一个包按需下载本机运行时。
 2. OpenVulcan OAuth 的登录方式：设备码流程，还是本机回环重定向。
-3. Codex hook 超时与崩溃时的行为，以及 Codex 桌面版与 IDE 扩展是否执行 hook。
-4. 复核 LLM 的默认提供方与在各宿主中的配置位置。
-5. dsh 接入方式的默认值：自动预设（`auto` 未被占用时）还是独立开关。
+3. 复核 LLM 的默认提供方与配置位置。
+4. dsh 接入方式的默认值：骨架暂定自动预设，尚未最终决定。
+5. Windows named pipe 目前使用默认 ACL，需要收紧为仅当前用户。
+6. 尚未在真实 dsh 安装中验证插件加载。
+7. （后续阶段）Codex hook 超时与崩溃时的行为，以及 Codex 桌面版与 IDE 扩展是否执行 hook。

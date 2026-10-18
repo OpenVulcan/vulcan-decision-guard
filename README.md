@@ -4,7 +4,7 @@
 先由 Vulcan Decision 模型判断这次调用是否安全：安全的直接放行，危险的拦截，拿不准的交给复核模型
 或由你确认。
 
-> 状态：设计阶段，尚不可用。架构草案见 [docs/architecture.md](docs/architecture.md)。
+> 状态：第一版骨架，只支持 DeepSeek harness（dsh），判定后端尚未实现，尚不可用。架构草案见 [docs/architecture.md](docs/architecture.md)。
 
 ## 特点
 

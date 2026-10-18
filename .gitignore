@@ -7,7 +7,7 @@ npm-debug.log*
 
 # Build outputs
 /dist/
-/npm/**/bin/
+/packages/*/lib/
 
 # Model packages and runtimes are downloaded, never committed
 *.onnx

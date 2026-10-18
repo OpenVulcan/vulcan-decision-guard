@@ -1,0 +1,3 @@
+- insert:
+    - id: vulcan-decision-guard
+      name: '@openvulcan/dsh-decision-guard'
