@@ -102,8 +102,23 @@ Claude Code 与 Codex 的调查结论保留在下表供后续阶段参考，两�
 - **复核 LLM**：`ctx.llm.stream` 使用当前 agent 的 provider 与模型，复核请求不进入会话日志。
 - **登录**：向 `dsh-authorization` 注册 OpenVulcan 的 OAuth flow，令牌存入宿主凭据存储
   （`dsh-credentials-local`），设置页发起登录与登出。
-- **界面**：设置页分节（`settings.section`）放置后端选择、模型尺寸、复核设置与账号；会话内的判定
-  理由显示在工具卡片；其他入口经 `ctx.slots.inject` 贡献到已声明的 slot。
+- **配置**：`src/index.ts` 的 `Config` 有四个字段：`mode`（接入方式）、`backend`（`cloud`/`local`）、
+  `modelSize`（省略即按设备推荐）、`review`（`host-model`/`off`）。dsh 的设置表单只暴露 `.volatile()`
+  字段，因此全部声明为 volatile，在每次操作开始时 `.get()` 读取；保存后 Host 发出
+  `loader/volatile-update`，插件无需重启。`backend`、`modelSize`、`review` 目前只保存，尚无代码读取，
+  相应功能上线后生效。
+- **设置页**：插件自带页面，经 `settings.configure({ auto: false })` 关闭 dsh 按 Schema 自动生成的页面，
+  浏览器端注册到 `plugins.bundle.config`（以包名为键，显示在插件详情页描述与组件列表之间），
+  经 `configForms.get('vulcan-decision-guard')` 读写，用 `SettingsForm` 外壳提供保存与离开时丢弃。
+  页面依次为：状态、接入方式、判定后端、模型尺寸（仅本机模型时显示）、拿不准的调用、OpenVulcan 账号
+  （尚未开放，登录按钮停用）。
+- **状态区的来源**：第三方插件无法新增 Remote（dsh 的 Remote 在构建时由 Typert 生成），浏览器端拿不到
+  Host 端的实时状态（如判定服务是否在运行），因此状态只由浏览器可读的事实推出：
+  - 判定：当前版本没有判定后端，固定显示“受管控的调用一律拒绝”。
+  - Auto 预设：由已保存的 `mode`、`pluginManager.listBundles()`（Auto review 是否启用）与
+    `permissionPresets.catalog()`（是否存在 `auto`）推出，收到 `plugin-manager/changed`、
+    `permission-presets/catalog-changed` 或连接重置时重读。
+- **其他界面**：会话内的判定理由显示在工具卡片；其他入口经 `ctx.slots.inject` 贡献到已声明的 slot。
 - **与权限预设的关系**：dsh 的权限预设表只允许配置预设与一个固定的 `auto` 槽位；`auto` 同时只能
   由一个集成注册（重复注册会抛错），官方实验插件 Auto review 使用它。`auto` 的组合固定为
   `danger-full-access` 沙箱加 `ask` 审批，即选中 `auto` 的会话没有文件沙箱。
@@ -126,8 +141,9 @@ Claude Code 与 Codex 的调查结论保留在下表供后续阶段参考，两�
     对方停用、槽位释放后自动接管，无需重启或重装。
   - 插件加载绝不因冲突失败：`auto` 被占用时不注册；`registerAuto` 因竞态抛错时捕获，按“已占用”处理。
     若本插件先注册，后加载的 Auto review 会在它自己的注册处报错（插件页显示“异常”），这是预期的冲突结果。
-- **自动预设方式的卸载与切换**：参照 Auto review：先停止接收，把仍处于 `auto` 的会话迁回配置预设，
-  再撤回注册。
+- **自动预设方式的卸载与切换**：参照 Auto review：先停止接收，把仍处于 `auto` 的会话迁回配置预设
+  （`workspace-write`），再撤回注册。设置页把接入方式改为独立开关时同样撤回；改回自动预设时立即
+  重新注册（`auto` 未被占用时）。
 
 ## 六、仓库结构
 
@@ -194,6 +210,8 @@ peer 依赖。插件加载时按 `@openvulcan/vulcan-decision-<platform>-<arch>/
 4. dsh 接入方式的默认值：骨架暂定自动预设，尚未最终决定。
 5. Windows named pipe 目前使用默认 ACL，需要收紧为仅当前用户。
 6. 已在 dsh 0.2.1-rc.2（npm `next`）中验证：`dsh plugin add` 安装打包后的插件、插件加载并拉起服务、
-   权限选择器出现 Auto；两种加载顺序下的冲突提示、“停用自动授权审查”按钮及停用后自动接管 Auto。
+   权限选择器出现 Auto；两种加载顺序下的冲突提示、“停用自动授权审查”按钮及停用后自动接管 Auto；
+   设置页的显示（含深色模式）与保存，保存写入 profile 的 `cordis.patch.yml`；切换为独立开关后 Auto
+   从权限选择器消失，切回自动预设后立即恢复；模型尺寸的设定与清除（恢复按设备推荐）。
    尚未验证实际工具调用的拦截（需要模型调用）。
 7. （后续阶段）Codex hook 超时与崩溃时的行为，以及 Codex 桌面版与 IDE 扩展是否执行 hook。

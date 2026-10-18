@@ -6,7 +6,9 @@
  * again when the supported dsh range moves:
  * - `packages/client/ui-plugin-manager/src/client/slot-contract.ts` (detail slots and subjects)
  * - `packages/boot/plugin-manager/src/types.ts` (`BundleInfo`, `ChangeResult`)
- * - `packages/client/ui-primitives/src/{Tag,Button}.tsx`
+ * - `packages/client/ui-primitives/src/{Tag,Button}.tsx`, `settings-form/SettingsForm.tsx`
+ * - `packages/client/ui-settings/src/client/config-form-types.ts` (`ConfigForm`)
+ * - `packages/interaction/permission-presets/src/types.ts` (`PermissionCatalog`)
  */
 
 /** Host operation result as the Remote layer returns it. */
@@ -52,6 +54,38 @@ export interface DetailProps {
   readonly t: (key: string) => string
 }
 
+/** Props of the bundle's own configuration page. */
+export interface ConfigPageProps {
+  readonly view: 'summary' | 'page'
+  readonly t: (key: string) => string
+}
+
+/** One field write of a configuration namespace. */
+export type ConfigOp =
+  | { readonly op: 'set'; readonly path: readonly string[]; readonly value: string }
+  | { readonly op: 'unset'; readonly path: readonly string[] }
+
+/** Accepted Host values of one configuration namespace. */
+export interface ConfigFormSnapshot<T> {
+  readonly status: 'loading' | 'ready' | 'unavailable'
+  readonly value: T | undefined
+  readonly revision: number | undefined
+  readonly writable: boolean
+}
+
+/** Reads and writes of one plugin entry's configuration namespace. */
+export interface ConfigForm<T> {
+  getSnapshot(): ConfigFormSnapshot<T>
+  subscribe(listener: () => void): () => void
+  /** @returns true when the Host accepted every operation. */
+  mutate(ops: readonly ConfigOp[], expectedRevision?: number): Promise<boolean>
+}
+
+/** The selectable permission presets as `permissionPresets.catalog()` reports them; only the fields read here. */
+export interface PermissionCatalog {
+  readonly options: readonly { readonly value: string }[]
+}
+
 /** The browser plugin context services this client half injects. */
 export interface ClientContext {
   effect(execute: () => () => void, label?: string): void
@@ -65,9 +99,19 @@ export interface ClientContext {
       options: { readonly name: string; readonly id: string; readonly locale: string },
       component: (props: DetailProps) => import('react').ReactNode,
     ): () => void
+    register(
+      options: { readonly name: 'plugins.bundle.config'; readonly key: string; readonly locale: string },
+      component: (props: ConfigPageProps) => import('react').ReactNode,
+    ): () => void
+  }
+  readonly configForms: {
+    get<T>(entryId: string): ConfigForm<T>
   }
   readonly remote: {
-    $on(name: 'plugin-manager/changed', listener: () => void): () => void
+    $on(name: 'plugin-manager/changed' | 'permission-presets/catalog-changed', listener: () => void): () => void
+    readonly permissionPresets: {
+      catalog(): Promise<RemoteResult<PermissionCatalog>>
+    }
     readonly pluginManager: {
       listBundles(): Promise<RemoteResult<BundleInfo[]>>
       setBundleEnabled(name: string, enabled: boolean): Promise<RemoteResult<ChangeResult>>
