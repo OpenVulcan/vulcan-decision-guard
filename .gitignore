@@ -1,0 +1,19 @@
+# Rust
+/target/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Build outputs
+/dist/
+/npm/**/bin/
+
+# Model packages and runtimes are downloaded, never committed
+*.onnx
+*.onnx.data
+
+# Local environment
+.env
+.env.*
+.DS_Store
