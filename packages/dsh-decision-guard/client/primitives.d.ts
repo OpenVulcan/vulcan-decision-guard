@@ -1,7 +1,7 @@
 /** Ambient types of dsh's UI primitives module; see dsh-client.ts for the source references. */
 
 declare module '@deepseek-ai/dsh-client-ui-primitives' {
-  import type { ButtonHTMLAttributes, ReactNode } from 'react'
+  import type { ButtonHTMLAttributes, ReactNode, Ref } from 'react'
 
   export type TagTone = 'outline' | 'solid' | 'neutral' | 'quiet' | 'success' | 'info' | 'warning' | 'danger'
 
@@ -11,6 +11,8 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
     variant?: 'primary' | 'ghost' | 'outline' | 'toolbar'
     size?: 'md' | 'sm'
     icon?: ReactNode
+    /** The primitive forwards it to the native button. */
+    ref?: Ref<HTMLButtonElement>
   }): ReactNode
 }
 

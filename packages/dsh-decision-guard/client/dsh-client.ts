@@ -9,6 +9,11 @@
  * - `packages/client/ui-primitives/src/{Tag,Button}.tsx`, `settings-form/SettingsForm.tsx`
  * - `packages/client/ui-settings/src/client/config-form-types.ts` (`ConfigForm`)
  * - `packages/interaction/permission-presets/src/types.ts` (`PermissionCatalog`)
+ * - `packages/client/ui-approval/src/client/contract/slots.ts` (`PendingApproval`)
+ * - `packages/client/ui-conversation/src/client/contract/slots.ts` (composer chain, input slots)
+ * - `packages/client/ui-session/src/client/index.ts` (`sessionId`, `useProjection` props)
+ * - `packages/api/session-controller/src/client/contract/{sessions,session}.ts` (`binding`, `command`)
+ * - `packages/api/session-controller/src/types.ts` (`ModelCatalog`)
  */
 
 /** Host operation result as the Remote layer returns it. */
@@ -60,9 +65,9 @@ export interface ConfigPageProps {
   readonly t: (key: string) => string
 }
 
-/** One field write of a configuration namespace. */
+/** One field write of a configuration namespace; `value` is JSON. */
 export type ConfigOp =
-  | { readonly op: 'set'; readonly path: readonly string[]; readonly value: string }
+  | { readonly op: 'set'; readonly path: readonly string[]; readonly value: unknown }
   | { readonly op: 'unset'; readonly path: readonly string[] }
 
 /** Accepted Host values of one configuration namespace. */
@@ -86,12 +91,61 @@ export interface PermissionCatalog {
   readonly options: readonly { readonly value: string }[]
 }
 
+/** Text with an English fallback, resolved by the UI language. */
+export interface LocalizedText {
+  readonly en: string
+  readonly [locale: string]: string
+}
+
+/** The pending approval a composer chain entry is offered; only the fields read here. */
+export interface PendingApprovalFace {
+  readonly kind: 'approval'
+  readonly key: string
+  readonly toolName: string
+  readonly reason: string | undefined
+  readonly displayReason: LocalizedText | undefined
+  readonly answerable: boolean
+  answer(outcome: 'allowed-once' | 'rejected'): Promise<void>
+}
+
+/** Owner props of the `conversation.composer` chain. */
+export interface ComposerChainProps {
+  readonly pendingInteraction: unknown
+}
+
+/** Props of a composer takeover, plus what this plugin injects. */
+export interface ComposerProps<M> {
+  readonly matched: M
+  readonly t: (key: string) => string
+  readonly resolveText: (text: LocalizedText) => string
+}
+
+/** Session-scoped props every session slot entry receives; only the fields read here. */
+export interface SessionSlotProps {
+  readonly sessionId: string
+  readonly useProjection: (key: string) => unknown
+  readonly t: (key: string) => string
+}
+
+/** One provider group of the model catalog. */
+export interface ModelProviderGroup {
+  readonly id: string
+  readonly name: string
+  readonly models: readonly { readonly id: string; readonly name: string }[]
+}
+
+/** The Host's model catalog; only the fields read here. */
+export interface ModelCatalog {
+  readonly groups: readonly ModelProviderGroup[]
+}
+
 /** The browser plugin context services this client half injects. */
 export interface ClientContext {
   effect(execute: () => () => void, label?: string): void
   on(name: 'connection/reset', listener: () => void): () => void
   readonly locale: {
     register(namespace: string, dictionaries: Readonly<Record<string, Readonly<Record<string, string>>>>): () => void
+    resolveText(text: LocalizedText): string
   }
   readonly slots: {
     inject(name: string, callback: () => () => void): void
@@ -103,6 +157,29 @@ export interface ClientContext {
       options: { readonly name: 'plugins.bundle.config'; readonly key: string; readonly locale: string },
       component: (props: ConfigPageProps) => import('react').ReactNode,
     ): () => void
+    register<M, I extends object>(
+      options: {
+        readonly name: 'conversation.composer'
+        readonly priority?: number
+        readonly locale: string
+        readonly select: (owner: ComposerChainProps) => M | null
+        readonly inject: () => I
+      },
+      component: (props: ComposerProps<M> & I) => import('react').ReactNode,
+    ): () => void
+    register<I extends object>(
+      options: {
+        readonly name: 'conversation.input.left'
+        readonly id: string
+        readonly order?: number
+        readonly locale: string
+        readonly inject: (sessionId: string) => I
+      },
+      component: (props: SessionSlotProps & I) => import('react').ReactNode,
+    ): () => void
+  }
+  readonly sessions: {
+    binding(sessionId: string): { readonly session: { command(line: string): Promise<RemoteResult<{ readonly matched: boolean }>> } } | undefined
   }
   readonly configForms: {
     get<T>(entryId: string): ConfigForm<T>
@@ -111,6 +188,9 @@ export interface ClientContext {
     $on(name: 'plugin-manager/changed' | 'permission-presets/catalog-changed', listener: () => void): () => void
     readonly permissionPresets: {
       catalog(): Promise<RemoteResult<PermissionCatalog>>
+    }
+    readonly session: {
+      modelCatalog(): Promise<RemoteResult<ModelCatalog>>
     }
     readonly pluginManager: {
       listBundles(): Promise<RemoteResult<BundleInfo[]>>

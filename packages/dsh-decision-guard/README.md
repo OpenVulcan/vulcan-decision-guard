@@ -1,7 +1,8 @@
 # @openvulcan/dsh-decision-guard
 
 DeepSeek harness（dsh）的 Vulcan Decision 权限守卫插件：每次工具调用执行前，由本机的
-`vulcan-decision-shell` 模型判定，模型未放行的调用可先交当前会话的模型复核，再询问你或拒绝。
+`vulcan-decision-shell` 模型判定，模型未放行的调用可先交复核 LLM（会话模型或指定模型）按你写的规则复核，
+再询问你或拒绝；无人值守的会话从不询问。
 它替代 dsh 自带的实验插件 Auto review，两者不能同时启用。
 
 ```sh

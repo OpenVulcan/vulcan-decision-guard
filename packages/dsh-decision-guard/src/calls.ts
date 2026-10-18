@@ -10,6 +10,8 @@
 import os from 'node:os'
 import path from 'node:path'
 
+import { INTENT_TOOL } from './decide.js'
+
 /** What to do with one call before the model sees it. */
 export type Translation =
   /** Judge the call with the model, rendered as this tool and arguments. */
@@ -32,6 +34,8 @@ const INTERNAL_TOOLS = new Set([
   'cordis_inspect_list',
   'cordis_inspect_query',
   'create_goal',
+  // Vulcan Decision's own intent tool only records a statement for the reviewer.
+  INTENT_TOOL,
   'get_goal',
   'update_goal',
   'job_list',

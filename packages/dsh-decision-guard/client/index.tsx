@@ -11,9 +11,12 @@
  * dsh loads this file as one lazy factory; it may import only modules dsh serves to plugins.
  */
 
-import { useId, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from 'react'
 import { Button, SettingsForm, Tag, type TagTone } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { BundleInfo, ClientContext, ConfigForm, ConfigOp, ConfigPageProps, DetailProps } from './dsh-client'
+import type {
+  BundleInfo, ClientContext, ComposerProps, ConfigForm, ConfigOp, ConfigPageProps, DetailProps, ModelCatalog,
+  LocalizedText, PendingApprovalFace, SessionSlotProps,
+} from './dsh-client'
 
 /** Must equal this package's name and its `cordis.patch.yml` row. */
 const PACKAGE_NAME = '@openvulcan/dsh-decision-guard'
@@ -25,7 +28,7 @@ const AUTO_REVIEW_PACKAGE = '@deepseek-ai/dsh-experimental-auto-review'
 const AUTO_PRESET = 'auto'
 const NAMESPACE = 'vulcan-decision-guard'
 
-export const inject = ['slots', 'locale', 'remote', 'remote.pluginManager', 'remote.permissionPresets', 'configForms']
+export const inject = ['slots', 'locale', 'sessions', 'remote', 'remote.pluginManager', 'remote.permissionPresets', 'remote.session', 'configForms']
 
 const zh = {
   'conflict.tag': '冲突',
@@ -72,11 +75,33 @@ const zh = {
   'model.title': '模型尺寸',
   'model.recommended': '按本机配置推荐',
   'model.hint': '尺寸越大判定越准确，占用的内存与时间也越多。所选尺寸必须已安装。',
-  'review.title': '模型未放行的调用',
-  'review.host-model': '先由当前会话的模型复核',
-  'review.host-model.hint': '需确认的调用经复核放行后直接执行，否则询问你；被拦截的调用复核最多改为询问你。复核会消耗当前会话所用模型的用量。',
-  'review.off': '不复核',
-  'review.off.hint': '需确认的调用直接询问你，被拦截的调用直接拒绝。',
+  'review.title': 'LLM 二次审核',
+  'review.session': '当前会话的模型',
+  'review.session.hint': '判定模型未放行的调用先交给会话正在使用的模型审核。审核会消耗该模型的用量。',
+  'review.custom': '指定模型',
+  'review.custom.hint': '由下方选择的模型审核，与会话所用模型无关。',
+  'review.off': '关闭',
+  'review.off.hint': '不做 LLM 审核：有人在场时需确认与被拦截的调用都询问你，无人值守时一律拒绝。',
+  'review.flow': '判定模型放行的调用直接执行，不经过 LLM。LLM 放行即执行；判定为「绝对禁止」时直接拒绝，不询问你；其他结论在有人时询问你，无人值守时拒绝。AI 可以先用 explain_tool_call 工具说明下一次调用的目的，说明会交给 LLM 并显示在确认框中。',
+  'review.provider': '提供方',
+  'review.model': '模型',
+  'review.pick': '请选择',
+  'review.catalogFailed': '无法读取模型列表。',
+  'review.missing': '尚未选择审核模型，审核会失败并按失败处理。',
+  'override.title': '允许 LLM 推翻拦截',
+  'override.hint': '开启后，判定模型拦截（block）的调用也交给 LLM 审核，LLM 放行即执行。关闭时被拦截的调用不经 LLM：有人时询问你（默认选中拒绝），无人值守时拒绝。',
+  'rules.title': 'LLM 审核规则',
+  'rules.hint': '用自然语言描述，原样交给 LLM。优先级：绝对禁止 > 禁止 > 允许 > LLM 自行判断。规则只作用于判定模型未放行的调用；判定模型已放行的调用不会经过 LLM。',
+  'rules.allow': '允许',
+  'rules.allow.placeholder': '例如：运行项目内的测试与构建命令。',
+  'rules.deny': '禁止',
+  'rules.deny.placeholder': '例如：推送到远程仓库。有人时询问你并默认选中拒绝。',
+  'rules.forbid': '绝对禁止',
+  'rules.forbid.placeholder': '例如：删除或改写生产数据库。直接拒绝，不询问你。',
+  'ask.title': '确认框',
+  'ask.timeout': '倒计时自动拒绝',
+  'ask.timeout.hint': '人不在电脑前又忘了打开无人值守时，确认框不会一直卡住：倒计时结束仍未选择就拒绝此次调用。关闭时确认框一直等待你。',
+  'ask.seconds': '秒',
   'options.title': '授权选项',
   'options.hint': '判定模型按这三项设置判断，以下是模型训练时使用的固定选项。',
   'cross.title': '项目外的普通写入',
@@ -103,6 +128,25 @@ const zh = {
   'form.saveFailed': '保存失败，设置已恢复为 dsh 当前保存的值。',
   'form.save': '保存',
   'form.saving': '正在保存…',
+
+  'prompt.strip': 'Vulcan Decision 等待你确认',
+  'prompt.stage.review': '需确认',
+  'prompt.stage.block': '已拦截',
+  'prompt.stage.unjudged': '无法判定',
+  'prompt.review.review': 'LLM：交由你决定',
+  'prompt.review.deny': 'LLM：未放行',
+  'prompt.review.error': 'LLM 审核失败',
+  'prompt.reason': 'LLM 理由',
+  'prompt.intent': 'AI 说明的目的',
+  'prompt.call': '调用 {tool}',
+  'prompt.countdown': '{seconds} 秒后自动拒绝',
+  'prompt.expired': '正在拒绝…',
+  'prompt.allow': '允许一次',
+  'prompt.reject': '拒绝',
+
+  'unattended.label': '无人值守',
+  'unattended.hint': '此会话无人值守：Vulcan Decision 不弹确认框，LLM 只在放行与拒绝之间选择，未放行的调用直接拒绝。',
+  'unattended.failed': '切换失败',
 }
 
 type Key = keyof typeof zh
@@ -152,11 +196,33 @@ const en: Record<Key, string> = {
   'model.title': 'Model size',
   'model.recommended': 'Recommended for this machine',
   'model.hint': 'Larger sizes judge more accurately and use more memory and time. The chosen size must be installed.',
-  'review.title': 'Calls the model did not allow',
-  'review.host-model': 'Review with the session\'s model first',
-  'review.host-model.hint': 'A call that needs confirmation runs when the review allows it, otherwise you are asked; a blocked call can at most be turned into a question. Reviews count toward the session model\'s usage.',
-  'review.off': 'No review',
-  'review.off.hint': 'Calls that need confirmation ask you; blocked calls are denied.',
+  'review.title': 'LLM review',
+  'review.session': 'The session\'s model',
+  'review.session.hint': 'Calls the decision model did not allow are first reviewed by the model the session uses. Reviews count toward that model\'s usage.',
+  'review.custom': 'A chosen model',
+  'review.custom.hint': 'The model chosen below reviews, whatever the session uses.',
+  'review.off': 'Off',
+  'review.off.hint': 'No LLM review: when someone is there, calls that need confirmation and blocked calls ask you; unattended sessions deny them.',
+  'review.flow': 'Calls the decision model allows run without the LLM. An LLM allow runs the call; "forbid" denies it without asking you; any other answer asks you when someone is there and denies the call when unattended. The AI can explain the purpose of its next call with the explain_tool_call tool first; the explanation goes to the LLM and appears in the prompt.',
+  'review.provider': 'Provider',
+  'review.model': 'Model',
+  'review.pick': 'Choose',
+  'review.catalogFailed': 'The model list cannot be read.',
+  'review.missing': 'No review model is chosen, so reviews fail and are treated as failures.',
+  'override.title': 'Let the LLM overturn blocks',
+  'override.hint': 'When on, calls the decision model blocks also go to the LLM review, and an LLM allow runs them. When off, blocked calls skip the LLM: they ask you (with Reject focused) when someone is there and are denied when unattended.',
+  'rules.title': 'LLM review rules',
+  'rules.hint': 'Plain language, given to the LLM as written. Precedence: forbid > deny > allow > the LLM\'s own judgment. Rules only apply to calls the decision model did not allow; calls it allows never reach the LLM.',
+  'rules.allow': 'Allow',
+  'rules.allow.placeholder': 'For example: running the project\'s tests and builds.',
+  'rules.deny': 'Deny',
+  'rules.deny.placeholder': 'For example: pushing to a remote. You are asked, with Reject focused.',
+  'rules.forbid': 'Forbid',
+  'rules.forbid.placeholder': 'For example: deleting or rewriting the production database. Denied without asking you.',
+  'ask.title': 'Approval prompt',
+  'ask.timeout': 'Reject after a countdown',
+  'ask.timeout.hint': 'When you are away from the machine but forgot to turn on unattended mode, the prompt does not hold the session: the call is rejected once the countdown ends without an answer. When off, the prompt waits for you.',
+  'ask.seconds': 'seconds',
   'options.title': 'Authorization options',
   'options.hint': 'The decision model judges with these three settings; they are the fixed options it was trained with.',
   'cross.title': 'Ordinary writes outside the project',
@@ -183,6 +249,25 @@ const en: Record<Key, string> = {
   'form.saveFailed': 'Saving failed; the settings show what dsh has stored.',
   'form.save': 'Save',
   'form.saving': 'Saving…',
+
+  'prompt.strip': 'Vulcan Decision is waiting for you',
+  'prompt.stage.review': 'Needs confirmation',
+  'prompt.stage.block': 'Blocked',
+  'prompt.stage.unjudged': 'Not judged',
+  'prompt.review.review': 'LLM: up to you',
+  'prompt.review.deny': 'LLM: not allowed',
+  'prompt.review.error': 'LLM review failed',
+  'prompt.reason': 'LLM reason',
+  'prompt.intent': 'Purpose stated by the AI',
+  'prompt.call': 'Call to {tool}',
+  'prompt.countdown': 'Rejects in {seconds} s',
+  'prompt.expired': 'Rejecting…',
+  'prompt.allow': 'Allow once',
+  'prompt.reject': 'Reject',
+
+  'unattended.label': 'Unattended',
+  'unattended.hint': 'Nobody attends this session: Vulcan Decision shows no prompts, the LLM only allows or denies, and calls it does not allow are denied.',
+  'unattended.failed': 'Could not switch',
 }
 
 /** Configuration values as the Host's schema resolves them; mirrors `Config` in `src/index.ts`. */
@@ -190,13 +275,69 @@ interface GuardSettings {
   readonly mode: 'auto-preset' | 'standalone'
   readonly backend: 'cloud' | 'local'
   readonly modelSize?: '0.2b' | '0.4b' | '0.6b' | undefined
-  readonly review: 'host-model' | 'off'
+  readonly review: 'session' | 'custom' | 'off'
+  readonly reviewProvider?: string | undefined
+  readonly reviewModel?: string | undefined
+  readonly allowRules: string
+  readonly denyRules: string
+  readonly forbidRules: string
+  readonly llmOverridesBlock: boolean
+  readonly askTimeout: number
   readonly crossProjectWrites: 'allow' | 'review'
   readonly databaseReset: 'confirm' | 'allow'
   readonly projectReset: 'confirm' | 'allow'
 }
 
 type Field = keyof GuardSettings
+
+/** A staged field value; `undefined` clears the field so it falls back to its default. */
+type Staged = string | number | boolean | undefined
+
+/** Countdown offered when the switch is turned on; the Host accepts 1 to {@link MAX_ASK_TIMEOUT}. */
+const DEFAULT_ASK_TIMEOUT = 60
+/** Mirrors `MAX_ASK_TIMEOUT` in `src/index.ts`. */
+const MAX_ASK_TIMEOUT = 3600
+
+/** Mirrors `PROMPT_KEY` and `PromptPayload` in `src/index.ts`. */
+const PROMPT_KEY = 'x-vulcan-decision'
+interface PromptPayload {
+  readonly v: 1
+  readonly stage: 'review' | 'block' | 'unjudged'
+  readonly review?: 'review' | 'deny' | 'error'
+  readonly reviewReason?: string
+  readonly focus: 'allow' | 'reject'
+  readonly intent?: string
+  readonly preview: string
+  readonly timeoutMs?: number
+}
+
+/** Mirrors `PROJECTION_KEY`, `GuardSessionView` and `UNATTENDED_COMMAND` in `src/unattended.ts`. */
+const PROJECTION_KEY = 'vulcanDecision'
+interface GuardSessionView {
+  readonly unattended: boolean
+}
+const UNATTENDED_COMMAND = 'vulcan-unattended'
+
+/** One of this plugin's approval prompts, as offered to the composer chain. */
+interface GuardApproval {
+  readonly pending: PendingApprovalFace
+  readonly payload: PromptPayload
+}
+
+/** Recognize this plugin's prompts by their payload; other approvals stay with dsh's own card. */
+function guardApprovalOf(interaction: unknown): GuardApproval | null {
+  if (typeof interaction !== 'object' || interaction === null) return null
+  const pending = interaction as Partial<PendingApprovalFace>
+  if (pending.kind !== 'approval' || typeof pending.answer !== 'function') return null
+  const raw = pending.displayReason?.[PROMPT_KEY]
+  if (typeof raw !== 'string') return null
+  try {
+    const payload = JSON.parse(raw) as PromptPayload
+    return payload.v === 1 ? { pending: pending as PendingApprovalFace, payload } : null
+  } catch {
+    return null
+  }
+}
 
 /** Terminal commands shown for installing a model and checking the service. */
 const INSTALL_COMMAND = 'npx @openvulcan/vulcan-decision model install <model directory> --size 0.2b'
@@ -284,13 +425,40 @@ const styles = {
     fontFamily: 'var(--dsw-font-mono, ui-monospace, monospace)', color: 'var(--dsw-alias-label-primary)',
     background: 'var(--dsw-alias-bg-layer-1)',
   },
+  textarea: {
+    width: '100%', boxSizing: 'border-box', padding: '8px 10px', borderRadius: 8, fontSize: 13, lineHeight: '20px',
+    resize: 'vertical', fontFamily: 'inherit',
+  },
+  toggle: {
+    display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, lineHeight: '18px', cursor: 'pointer',
+    color: 'var(--dsw-alias-label-secondary)', whiteSpace: 'nowrap',
+  },
+  promptRoot: { display: 'flex', flexDirection: 'column', padding: '0 0 8px' },
+  promptCard: {
+    display: 'flex', flexDirection: 'column', borderRadius: 16, overflow: 'hidden',
+    border: '1px solid var(--dsw-alias-border-l2)', background: 'var(--dsw-alias-bg-layer-1)',
+  },
+  promptStrip: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '8px 14px', fontSize: 12,
+    lineHeight: '18px', color: 'var(--dsw-alias-label-secondary)', background: 'var(--dsw-alias-bg-layer-2)',
+  },
+  promptBody: { display: 'flex', flexDirection: 'column', gap: 8, padding: '12px 14px', maxHeight: 320, overflow: 'auto' },
+  promptActions: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '8px 14px 12px',
+  },
   notice: {
     margin: 0, padding: '10px 12px', borderRadius: 8, fontSize: 12, lineHeight: '18px',
     color: 'var(--dsw-alias-label-secondary)', background: 'var(--dsw-alias-bg-layer-2)',
   },
 } as const satisfies Record<string, import('react').CSSProperties>
 
-/** Install the settings page and the conflict notice while this plugin is enabled. */
+/** What the unattended checkbox registration injects. */
+interface UnattendedInjected {
+  /** Switch the session through the Host command; rejects when the Host does not accept it. */
+  readonly toggle: (unattended: boolean) => Promise<void>
+}
+
+/** Install the settings page, the conflict notice, the approval card and the unattended checkbox. */
 export function apply(ctx: ClientContext): void {
   const autoReview = new HostWatch<boolean>(async () => {
     const result = await ctx.remote.pluginManager.listBundles()
@@ -299,6 +467,10 @@ export function apply(ctx: ClientContext): void {
   const autoListed = new HostWatch<boolean>(async () => {
     const result = await ctx.remote.permissionPresets.catalog()
     return result.ok ? result.value.options.some(option => option.value === AUTO_PRESET) : undefined
+  })
+  const modelCatalog = new HostWatch<ModelCatalog>(async () => {
+    const result = await ctx.remote.session.modelCatalog()
+    return result.ok ? result.value : undefined
   })
   const form: ConfigForm<GuardSettings> = ctx.configForms.get<GuardSettings>(ENTRY_ID)
   // The form's methods are class methods; React calls store functions without a receiver.
@@ -321,6 +493,7 @@ export function apply(ctx: ClientContext): void {
       for (const stop of stops) stop()
       autoReview.close()
       autoListed.close()
+      modelCatalog.close()
     }
   }, 'vulcan-decision-guard: Host state')
 
@@ -509,28 +682,113 @@ export function apply(ctx: ClientContext): void {
     )
   }
 
+  /** Provider and model pickers for a chosen review model, from the Host's model catalog. */
+  function ReviewModelPicker({ t, provider, model, disabled, onChange }: {
+    t: (key: Key) => string
+    provider: string
+    model: string
+    disabled: boolean
+    onChange: (provider: string, model: string) => void
+  }) {
+    const catalog = useSyncExternalStore(modelCatalog.subscribe, modelCatalog.getSnapshot)
+    const providerId = useId()
+    const modelId = useId()
+    useEffect(() => { modelCatalog.refresh() }, [])
+    if (catalog === undefined) return <p style={styles.hint}>{t('review.catalogFailed')}</p>
+    const groups = catalog.groups
+    const group = groups.find(item => item.id === provider)
+    // A saved choice the catalog no longer lists stays visible instead of silently changing.
+    const providers = group === undefined && provider !== '' ? [{ id: provider, name: provider, models: [] }, ...groups] : groups
+    const models = group?.models ?? []
+    const modelList = models.some(item => item.id === model) || model === '' ? models : [{ id: model, name: model }, ...models]
+    return (
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ ...styles.section, gap: 6 }}>
+          <label htmlFor={providerId} style={styles.hint}>{t('review.provider')}</label>
+          <select
+            id={providerId}
+            style={styles.select}
+            value={provider}
+            disabled={disabled}
+            onChange={(event) => { onChange(event.target.value, '') }}
+          >
+            <option value="">{t('review.pick')}</option>
+            {providers.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </select>
+        </div>
+        <div style={{ ...styles.section, gap: 6 }}>
+          <label htmlFor={modelId} style={styles.hint}>{t('review.model')}</label>
+          <select
+            id={modelId}
+            style={styles.select}
+            value={model}
+            disabled={disabled || provider === ''}
+            onChange={(event) => { onChange(provider, event.target.value) }}
+          >
+            <option value="">{t('review.pick')}</option>
+            {modelList.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </select>
+        </div>
+      </div>
+    )
+  }
+
+  function RuleField({ id, title, placeholder, value, disabled, onChange }: {
+    id: string
+    title: string
+    placeholder: string
+    value: string
+    disabled: boolean
+    onChange: (value: string) => void
+  }) {
+    return (
+      <div style={{ ...styles.section, gap: 6 }}>
+        <label htmlFor={id} style={styles.optionTitle}>{title}</label>
+        <textarea
+          id={id}
+          rows={3}
+          style={styles.textarea}
+          value={value}
+          placeholder={placeholder}
+          disabled={disabled}
+          onChange={(event) => { onChange(event.target.value) }}
+        />
+      </div>
+    )
+  }
+
   function SettingsPage({ view, t: translate }: ConfigPageProps) {
     const t = translate as (key: Key) => string
     const accepted = useSyncExternalStore(subscribeForm, formSnapshot)
-    const [draft, setDraft] = useState<Partial<Record<Field, string>>>({})
+    const [draft, setDraft] = useState<Partial<Record<Field, Staged>>>({})
     const [saving, setSaving] = useState(false)
     const [failed, setFailed] = useState(false)
     const modelId = useId()
+    const ruleId = useId()
+    const timeoutId = useId()
     if (view === 'summary') return t('summary')
 
     const value = accepted.value
-    // A staged value wins over the accepted one; '' stands for an unset model size.
-    const current = <F extends Field>(field: F): string => draft[field] ?? (value?.[field] ?? '')
-    const edit = (field: Field, next: string): void => {
+    // A staged value wins over the accepted one.
+    const current = (field: Field): Staged => (field in draft ? draft[field] : value?.[field])
+    const text = (field: Field): string => {
+      const staged = current(field)
+      return typeof staged === 'string' ? staged : ''
+    }
+    const edit = (changes: Partial<Record<Field, Staged>>): void => {
       setFailed(false)
       setDraft((staged) => {
-        const { [field]: _dropped, ...rest } = staged
-        return (value?.[field] ?? '') === next ? rest : { ...rest, [field]: next }
+        const next = { ...staged }
+        for (const [field, change] of Object.entries(changes) as [Field, Staged][]) {
+          if (Object.is(value?.[field], change)) delete next[field]
+          else next[field] = change
+        }
+        return next
       })
     }
     const save = (): void => {
-      const ops: ConfigOp[] = Object.entries(draft).map(([field, next]) => (
-        next === '' ? { op: 'unset', path: [field] } : { op: 'set', path: [field], value: next }
+      const ops: ConfigOp[] = (Object.entries(draft) as [Field, Staged][]).map(([field, next]) => (
+        next === undefined ? { op: 'unset', path: [field] } : { op: 'set', path: [field], value: next }
       ))
       setSaving(true)
       form.mutate(ops, accepted.revision).then((landed) => {
@@ -543,6 +801,9 @@ export function apply(ctx: ClientContext): void {
     const disabled = !accepted.writable || saving
     const mode = current('mode') as GuardSettings['mode']
     const backend = current('backend') as GuardSettings['backend']
+    const review = (current('review') ?? 'session') as GuardSettings['review']
+    const askTimeout = typeof current('askTimeout') === 'number' ? current('askTimeout') as number : 0
+    const timeoutInvalid = askTimeout !== 0 && (!Number.isInteger(askTimeout) || askTimeout < 1 || askTimeout > MAX_ASK_TIMEOUT)
 
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
@@ -559,7 +820,7 @@ export function apply(ctx: ClientContext): void {
             available: accepted.status === 'ready',
             writable: accepted.writable,
             dirty: Object.keys(draft).length > 0,
-            invalid: false,
+            invalid: timeoutInvalid,
             saving,
             failed,
           }}
@@ -573,7 +834,7 @@ export function apply(ctx: ClientContext): void {
               values={['auto-preset', 'standalone'] as const}
               current={mode}
               disabled={disabled}
-              onChoose={(next) => { edit('mode', next) }}
+              onChoose={(next) => { edit({ mode: next }) }}
               t={t}
             />
             <ChoiceGroup
@@ -583,7 +844,7 @@ export function apply(ctx: ClientContext): void {
               current={backend}
               disabled={disabled}
               unavailable={['cloud']}
-              onChoose={(next) => { edit('backend', next) }}
+              onChoose={(next) => { edit({ backend: next }) }}
               t={t}
             />
             {backend === 'local'
@@ -593,9 +854,9 @@ export function apply(ctx: ClientContext): void {
                   <select
                     id={modelId}
                     style={styles.select}
-                    value={current('modelSize')}
+                    value={text('modelSize')}
                     disabled={disabled}
-                    onChange={(event) => { edit('modelSize', event.target.value) }}
+                    onChange={(event) => { edit({ modelSize: event.target.value === '' ? undefined : event.target.value }) }}
                   >
                     {MODEL_SIZES.map(size => (
                       <option key={size} value={size}>{size === '' ? t('model.recommended') : size.toUpperCase()}</option>
@@ -621,7 +882,7 @@ export function apply(ctx: ClientContext): void {
                 values={['allow', 'review'] as const}
                 current={current('crossProjectWrites') as GuardSettings['crossProjectWrites']}
                 disabled={disabled}
-                onChoose={(next) => { edit('crossProjectWrites', next) }}
+                onChoose={(next) => { edit({ crossProjectWrites: next }) }}
                 t={t}
               />
               <ChoiceGroup
@@ -630,7 +891,7 @@ export function apply(ctx: ClientContext): void {
                 values={['confirm', 'allow'] as const}
                 current={current('databaseReset') as GuardSettings['databaseReset']}
                 disabled={disabled}
-                onChoose={(next) => { edit('databaseReset', next) }}
+                onChoose={(next) => { edit({ databaseReset: next }) }}
                 t={t}
               />
               <ChoiceGroup
@@ -639,19 +900,126 @@ export function apply(ctx: ClientContext): void {
                 values={['confirm', 'allow'] as const}
                 current={current('projectReset') as GuardSettings['projectReset']}
                 disabled={disabled}
-                onChoose={(next) => { edit('projectReset', next) }}
+                onChoose={(next) => { edit({ projectReset: next }) }}
                 t={t}
               />
             </section>
-            <ChoiceGroup
-              title={t('review.title')}
-              prefix="review"
-              values={['host-model', 'off'] as const}
-              current={current('review') as GuardSettings['review']}
-              disabled={disabled}
-              onChoose={(next) => { edit('review', next) }}
-              t={t}
-            />
+            <section style={styles.section}>
+              <ChoiceGroup
+                title={t('review.title')}
+                prefix="review"
+                values={['session', 'custom', 'off'] as const}
+                current={review}
+                disabled={disabled}
+                onChoose={(next) => { edit({ review: next }) }}
+                t={t}
+              />
+              <p style={styles.notice}>{t('review.flow')}</p>
+              {review === 'custom'
+                ? (
+                  <>
+                    <ReviewModelPicker
+                      t={t}
+                      provider={text('reviewProvider')}
+                      model={text('reviewModel')}
+                      disabled={disabled}
+                      onChange={(provider, model) => {
+                        edit({ reviewProvider: provider === '' ? undefined : provider, reviewModel: model === '' ? undefined : model })
+                      }}
+                    />
+                    {text('reviewProvider') === '' || text('reviewModel') === ''
+                      ? <p style={{ ...styles.hint, color: 'var(--dsw-alias-state-warn-label)' }}>{t('review.missing')}</p>
+                      : null}
+                  </>
+                )
+                : null}
+            </section>
+            {review === 'off'
+              ? null
+              : (
+                <>
+                  <section style={styles.section}>
+                    <label style={{ ...styles.option, ...styles.card, flexDirection: 'row' }}>
+                      <input
+                        type="checkbox"
+                        checked={current('llmOverridesBlock') === true}
+                        disabled={disabled}
+                        onChange={(event) => { edit({ llmOverridesBlock: event.target.checked }) }}
+                        style={styles.radio}
+                      />
+                      <span>
+                        <span style={styles.optionTitle}>{t('override.title')}</span>
+                        <span style={styles.hint}>{t('override.hint')}</span>
+                      </span>
+                    </label>
+                  </section>
+                  <section style={styles.section}>
+                    <h4 style={styles.heading}>{t('rules.title')}</h4>
+                    <p style={styles.hint}>{t('rules.hint')}</p>
+                    <RuleField
+                      id={`${ruleId}-forbid`}
+                      title={t('rules.forbid')}
+                      placeholder={t('rules.forbid.placeholder')}
+                      value={text('forbidRules')}
+                      disabled={disabled}
+                      onChange={(next) => { edit({ forbidRules: next }) }}
+                    />
+                    <RuleField
+                      id={`${ruleId}-deny`}
+                      title={t('rules.deny')}
+                      placeholder={t('rules.deny.placeholder')}
+                      value={text('denyRules')}
+                      disabled={disabled}
+                      onChange={(next) => { edit({ denyRules: next }) }}
+                    />
+                    <RuleField
+                      id={`${ruleId}-allow`}
+                      title={t('rules.allow')}
+                      placeholder={t('rules.allow.placeholder')}
+                      value={text('allowRules')}
+                      disabled={disabled}
+                      onChange={(next) => { edit({ allowRules: next }) }}
+                    />
+                  </section>
+                </>
+              )}
+            <section style={styles.section}>
+              <h4 style={styles.heading}>{t('ask.title')}</h4>
+              <div style={{ ...styles.card, ...styles.option, cursor: 'default', flexDirection: 'column', gap: 8 }}>
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: disabled ? 'default' : 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={askTimeout > 0}
+                    disabled={disabled}
+                    onChange={(event) => { edit({ askTimeout: event.target.checked ? DEFAULT_ASK_TIMEOUT : 0 }) }}
+                    style={styles.radio}
+                  />
+                  <span>
+                    <span style={styles.optionTitle}>{t('ask.timeout')}</span>
+                    <span style={styles.hint}>{t('ask.timeout.hint')}</span>
+                  </span>
+                </label>
+                {askTimeout > 0 || timeoutInvalid
+                  ? (
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 26 }}>
+                      <input
+                        id={timeoutId}
+                        type="number"
+                        min={1}
+                        max={MAX_ASK_TIMEOUT}
+                        step={1}
+                        value={askTimeout}
+                        disabled={disabled}
+                        aria-invalid={timeoutInvalid}
+                        onChange={(event) => { edit({ askTimeout: event.target.value === '' ? 0 : Number(event.target.value) }) }}
+                        style={{ ...styles.select, minWidth: 0, width: 96 }}
+                      />
+                      <label htmlFor={timeoutId} style={styles.hint}>{t('ask.seconds')}</label>
+                    </span>
+                  )
+                  : null}
+              </div>
+            </section>
             <section style={styles.section}>
               <h4 style={styles.heading}>{t('account.title')}</h4>
               <div style={{ ...styles.card, ...styles.statusRow, flexDirection: 'row', alignItems: 'center' }}>
@@ -662,6 +1030,128 @@ export function apply(ctx: ClientContext): void {
           </div>
         </SettingsForm>
       </div>
+    )
+  }
+
+  /** Seconds left until the Host rejects an unanswered prompt, counted from when it appeared. */
+  function useCountdown(timeoutMs: number | undefined): number | undefined {
+    const [now, setNow] = useState(() => Date.now())
+    const [start] = useState(() => Date.now())
+    useEffect(() => {
+      if (timeoutMs === undefined) return undefined
+      const timer = setInterval(() => { setNow(Date.now()) }, 250)
+      return () => { clearInterval(timer) }
+    }, [timeoutMs])
+    return timeoutMs === undefined ? undefined : Math.max(0, Math.ceil((start + timeoutMs - now) / 1000))
+  }
+
+  function ApprovalCard({ matched, t: translate, resolveText }: ComposerProps<GuardApproval>) {
+    return <ApprovalFlow key={matched.pending.key} approval={matched} t={translate as (key: Key) => string} resolveText={resolveText} />
+  }
+
+  function ApprovalFlow({ approval, t, resolveText }: {
+    approval: GuardApproval
+    t: (key: Key) => string
+    resolveText: ComposerProps<GuardApproval>['resolveText']
+  }) {
+    const { pending, payload } = approval
+    const [answered, setAnswered] = useState(false)
+    const allowRef = useRef<HTMLButtonElement>(null)
+    const rejectRef = useRef<HTMLButtonElement>(null)
+    const left = useCountdown(payload.timeoutMs)
+    useEffect(() => {
+      (payload.focus === 'allow' ? allowRef : rejectRef).current?.focus()
+    }, [payload.focus])
+    const answer = (outcome: 'allowed-once' | 'rejected'): void => {
+      if (answered || !pending.answerable) return
+      setAnswered(true)
+      pending.answer(outcome).catch(() => {
+        if (pending.answerable) setAnswered(false)
+      })
+    }
+    const keydown = (event: KeyboardEvent<HTMLDivElement>): void => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return
+      event.preventDefault()
+      event.stopPropagation()
+      answer('rejected')
+    }
+    const headline = pending.displayReason === undefined ? pending.reason ?? '' : resolveText(pending.displayReason)
+    const tone: TagTone = payload.stage === 'review' ? 'warning' : 'danger'
+    return (
+      <div style={styles.promptRoot} aria-busy={answered} onKeyDown={keydown}>
+        <div style={styles.promptCard}>
+          <div style={styles.promptStrip}>
+            <span>{t('prompt.strip')}</span>
+            <span style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+              <Tag tone={tone}>{t(`prompt.stage.${payload.stage}` as Key)}</Tag>
+              {payload.review === undefined ? null : <Tag tone="neutral">{t(`prompt.review.${payload.review}` as Key)}</Tag>}
+            </span>
+          </div>
+          <div style={styles.promptBody} role="group" aria-label={t('prompt.strip')}>
+            <div style={styles.optionTitle}>{headline}</div>
+            <div style={styles.hint}>{t('prompt.call').replace('{tool}', pending.toolName)}</div>
+            <code style={{ ...styles.command, whiteSpace: 'pre-wrap', maxHeight: 160, overflow: 'auto' }}>{payload.preview}</code>
+            {payload.reviewReason === undefined
+              ? null
+              : <p style={styles.hint}><strong style={{ display: 'block', fontWeight: 500 }}>{t('prompt.reason')}</strong>{payload.reviewReason}</p>}
+            {payload.intent === undefined
+              ? null
+              : <p style={styles.hint}><strong style={{ display: 'block', fontWeight: 500 }}>{t('prompt.intent')}</strong>{payload.intent}</p>}
+          </div>
+          <div style={styles.promptActions}>
+            {left === undefined
+              ? <span />
+              : (
+                <span role="timer" style={{ ...styles.hint, color: 'var(--dsw-alias-state-warn-label)' }}>
+                  {left > 0 ? t('prompt.countdown').replace('{seconds}', String(left)) : t('prompt.expired')}
+                </span>
+              )}
+            <span style={{ display: 'flex', gap: 8 }}>
+              <Button ref={rejectRef} variant={payload.focus === 'reject' ? 'primary' : 'outline'} disabled={answered} onClick={() => { answer('rejected') }}>
+                {t('prompt.reject')}
+              </Button>
+              <Button ref={allowRef} variant={payload.focus === 'allow' ? 'primary' : 'outline'} disabled={answered} onClick={() => { answer('allowed-once') }}>
+                {t('prompt.allow')}
+              </Button>
+            </span>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  /** The composer checkbox that marks a governed session unattended. */
+  function UnattendedToggle({ useProjection, t: translate, toggle }: SessionSlotProps & UnattendedInjected) {
+    const t = translate as (key: Key) => string
+    const view = useProjection(PROJECTION_KEY) as GuardSessionView | undefined
+    const permissions = useProjection('permissions') as { readonly currentValue?: string } | undefined
+    const settings = useSyncExternalStore(subscribeForm, formSnapshot)
+    const [pending, setPending] = useState<boolean | undefined>(undefined)
+    const [failed, setFailed] = useState(false)
+    if (view === undefined || settings.value === undefined) return null
+    const governed = settings.value.mode === 'standalone' || permissions?.currentValue === AUTO_PRESET
+    if (!governed) return null
+    const checked = pending ?? view.unattended
+    const change = (next: boolean): void => {
+      setPending(next)
+      setFailed(false)
+      toggle(next).then(() => { setPending(undefined) }, () => {
+        setPending(undefined)
+        setFailed(true)
+      })
+    }
+    return (
+      <label title={failed ? t('unattended.failed') : t('unattended.hint')} style={styles.toggle}>
+        <input
+          type="checkbox"
+          aria-label={t('unattended.label')}
+          checked={checked}
+          disabled={pending !== undefined}
+          onChange={(event) => { change(event.target.checked) }}
+          style={styles.radio}
+        />
+        <span style={failed ? { color: 'var(--dsw-alias-state-error-primary)' } : undefined}>{t('unattended.label')}</span>
+      </label>
     )
   }
 
@@ -680,4 +1170,26 @@ export function apply(ctx: ClientContext): void {
     id: 'vulcan-decision-guard-conflict',
     locale: NAMESPACE,
   }, ConflictSection))
+  // Ahead of dsh's own approval card (priority 1), and only for this plugin's prompts.
+  ctx.slots.inject('conversation.composer', () => ctx.slots.register({
+    name: 'conversation.composer',
+    priority: 0,
+    locale: NAMESPACE,
+    select: ({ pendingInteraction }) => guardApprovalOf(pendingInteraction),
+    inject: () => ({ resolveText: (text: LocalizedText) => ctx.locale.resolveText(text) }),
+  }, ApprovalCard))
+  ctx.slots.inject('conversation.input.left', () => ctx.slots.register({
+    name: 'conversation.input.left',
+    id: 'vulcan-decision-guard-unattended',
+    locale: NAMESPACE,
+    inject: (sessionId: string): UnattendedInjected => ({
+      toggle: async (unattended) => {
+        const session = ctx.sessions.binding(sessionId)?.session
+        if (session === undefined) throw new Error('this session is not materialized yet')
+        const result = await session.command(`/${UNATTENDED_COMMAND} ${unattended ? 'on' : 'off'}`)
+        if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
+        if (!result.value.matched) throw new Error(`the Host offers no /${UNATTENDED_COMMAND} command`)
+      },
+    }),
+  }, UnattendedToggle))
 }

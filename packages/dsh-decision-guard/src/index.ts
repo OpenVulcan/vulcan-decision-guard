@@ -2,19 +2,25 @@ import type { Context, Volatile } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import { AUTO_PRESET } from '@deepseek-ai/dsh-permission-presets'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-settings'
 import { RUN_CODE_NAME, type PreToolDecision, type ToolExecution } from '@deepseek-ai/dsh-tools'
+import type {} from '@deepseek-ai/dsh-user-approval'
 import type {} from '@deepseek-ai/dsh-working-directory'
 import { DecisionClient, type DecisionOptions, type JudgeSettings } from '@openvulcan/vulcan-decision/client'
 
 import { translateCall } from './calls.js'
-import { decide, wantsReview, type FirstStage, type SecondStage } from './decide.js'
+import { decide, stageOf, wantsReview, type FirstStage, type Outcome, type SecondStage, type Situation } from './decide.js'
+import { IntentStore, intentTool } from './intent.js'
 import { reviewCall } from './review.js'
+import { installUnattended } from './unattended.js'
+
+export { PROJECTION_KEY, UNATTENDED_COMMAND, UNATTENDED_RECORD, type GuardSessionView } from './unattended.js'
 
 export const name = 'vulcan-decision-guard'
-export const inject = ['llm', 'permissionPresets', 'sessions', 'tools', 'workingDirectory']
+export const inject = ['llm', 'permissionPresets', 'sessionProjections', 'sessions', 'tools', 'workingDirectory']
 
 /**
  * How users turn the guard on.
@@ -32,12 +38,13 @@ export type Backend = 'cloud' | 'local'
 export type ModelSize = '0.2b' | '0.4b' | '0.6b'
 
 /**
- * What happens to a call the decision model did not allow.
+ * Which LLM reviews calls the decision model did not allow.
  *
- * - `host-model`: the current session's model reviews it; the user is asked when it still does not allow.
- * - `off`: the user is asked directly.
+ * - `session`: the session's current model.
+ * - `custom`: `reviewProvider` and `reviewModel`.
+ * - `off`: no LLM review; the user is asked, or the call is refused when nobody can be asked.
  */
-export type Review = 'host-model' | 'off'
+export type Review = 'session' | 'custom' | 'off'
 
 /**
  * Every field is volatile: dsh's settings forms expose only volatile fields, and a change applies
@@ -49,10 +56,21 @@ export interface Config {
   /** Absent means the largest installed size this device suits. */
   modelSize: Volatile<ModelSize | undefined>
   review: Volatile<Review>
+  reviewProvider: Volatile<string | undefined>
+  reviewModel: Volatile<string | undefined>
+  allowRules: Volatile<string>
+  denyRules: Volatile<string>
+  forbidRules: Volatile<string>
+  llmOverridesBlock: Volatile<boolean>
+  /** Seconds an approval prompt waits before the call is refused; 0 waits for the user. */
+  askTimeout: Volatile<number>
   crossProjectWrites: Volatile<DecisionOptions['cross_project_writes']>
   databaseReset: Volatile<DecisionOptions['database_reset']>
   projectReset: Volatile<DecisionOptions['project_reset']>
 }
+
+/** Longest approval countdown the settings accept, in seconds. */
+const MAX_ASK_TIMEOUT = 3600
 
 export const Config = Schema.object({
   mode: Schema.union(['auto-preset', 'standalone'] as const)
@@ -66,9 +84,32 @@ export const Config = Schema.object({
   modelSize: Schema.union(['0.2b', '0.4b', '0.6b'] as const)
     .description('Local model size; omitted means the largest installed size this device suits.')
     .volatile(),
-  review: Schema.union(['host-model', 'off'] as const)
-    .default('host-model')
-    .description('host-model: the session model reviews calls the decision model did not allow before the user is asked. off: those calls go to the user.')
+  review: Schema.union(['session', 'custom', 'off'] as const)
+    .default('session')
+    .description('LLM review of calls the decision model did not allow. session: the session model. custom: reviewProvider and reviewModel. off: no review.')
+    .volatile(),
+  reviewProvider: Schema.string()
+    .description('Provider of the review model when review is custom.')
+    .volatile(),
+  reviewModel: Schema.string()
+    .description('Review model when review is custom.')
+    .volatile(),
+  allowRules: Schema.string().role('textarea').default('')
+    .description('Natural-language rules for calls the LLM review should allow.')
+    .volatile(),
+  denyRules: Schema.string().role('textarea').default('')
+    .description('Natural-language rules for calls the LLM review should deny; the user is still asked when present.')
+    .volatile(),
+  forbidRules: Schema.string().role('textarea').default('')
+    .description('Natural-language rules for calls the LLM review refuses without asking anyone.')
+    .volatile(),
+  llmOverridesBlock: Schema.boolean()
+    .default(false)
+    .description('Whether calls the decision model blocks also go to the LLM review, which may then allow them.')
+    .volatile(),
+  askTimeout: Schema.natural().max(MAX_ASK_TIMEOUT)
+    .default(0)
+    .description('Seconds an approval prompt waits before the call is refused; 0 waits for the user.')
     .volatile(),
   crossProjectWrites: Schema.union(['allow', 'review'] as const)
     .default('allow')
@@ -84,11 +125,41 @@ export const Config = Schema.object({
     .volatile(),
 })
 
+/** Settings namespace of dsh's locale plugin, whose `preference` is the chosen interface language. */
+const LOCALE_SETTINGS = 'locale'
+
 /** Preset that sessions still on `auto` move to when the guard is removed. */
 const FALLBACK_PRESET = 'workspace-write'
 
 /** Structured error identity of a final denial. */
 const DENIED_INFO = { name: 'VulcanDecisionDeniedError', code: 'VULCAN_DECISION_DENIED' } as const
+
+/**
+ * Key of the approval prompt's `displayReason` entry that carries {@link PromptPayload} as JSON.
+ * dsh resolves the prompt text by locale and never reads this key; this plugin's composer card
+ * does. Also restated in `client/index.tsx`.
+ */
+export const PROMPT_KEY = 'x-vulcan-decision'
+
+/** What this plugin's approval card reads from {@link PROMPT_KEY}. */
+export interface PromptPayload {
+  readonly v: 1
+  readonly stage: 'review' | 'block' | 'unjudged'
+  readonly review?: 'review' | 'deny' | 'error'
+  readonly reviewReason?: string
+  readonly focus: 'allow' | 'reject'
+  readonly intent?: string
+  /** The call's command or arguments, shortened. */
+  readonly preview: string
+  /** Countdown length; absent when the prompt waits for the user. */
+  readonly timeoutMs?: number
+}
+
+/** A call the gate finished with, and the purpose the agent stated for it. */
+interface Gated {
+  readonly outcome: Outcome
+  readonly intent: string | undefined
+}
 
 /** Install the Vulcan Decision gate and, in `auto-preset` mode, the Auto preset. */
 export function apply(ctx: Context, config: Config): void {
@@ -96,11 +167,15 @@ export function apply(ctx: Context, config: Config): void {
   const permissionPresets = ctx.permissionPresets
   const sessions = ctx.sessions
   const llm = ctx.llm
+  const tools = ctx.tools
   const client = new DecisionClient()
+  const intents = new IntentStore()
   const lifecycle = new AbortController()
   let accepting = true
   let releasing = false
   let ownsAuto = false
+
+  const markedUnattended = installUnattended(ctx)
 
   const governs = (exec: ToolExecution): boolean => {
     const agent = exec.agent
@@ -111,18 +186,51 @@ export function apply(ctx: Context, config: Config): void {
     return ownsAuto && permissionPresets.current(agent.session) === AUTO_PRESET
   }
 
+  /** Nobody can be asked: the session is marked unattended, or its approval policy never asks. */
+  const unattended = (agent: Agent): boolean => {
+    if (markedUnattended(agent.session)) return true
+    const approval = ctx.get('approval')
+    return approval !== undefined && (approval.overrideOf(agent.session) ?? approval.config.policy ?? 'ask') === 'never'
+  }
+
   const options = (): DecisionOptions => ({
     cross_project_writes: config.crossProjectWrites.get(),
     database_reset: config.databaseReset.get(),
     project_reset: config.projectReset.get(),
   })
 
-  const gate = async (exec: ToolExecution, signal: AbortSignal): Promise<PreToolDecision | 'next'> => {
+  /**
+   * The interface language the user chose in dsh's settings, or undefined when it follows the
+   * browser, which the Host cannot see.
+   */
+  const interfaceLanguage = (): string | undefined => {
+    const descriptor = ctx.get('settings')?.describe().find(item => item.ns === LOCALE_SETTINGS)
+    const value = descriptor?.value
+    const preference = typeof value === 'object' && value !== null ? (value as Record<string, unknown>)['preference'] : undefined
+    return typeof preference === 'string' && preference !== '' ? preference : undefined
+  }
+
+  /** The provider and model that review this agent's calls. */
+  const reviewRoute = (agent: Agent): { provider: string; model: string } | string => {
+    if (config.review.get() === 'custom') {
+      const provider = config.reviewProvider.get()
+      const model = config.reviewModel.get()
+      return provider === undefined || model === undefined || provider === '' || model === ''
+        ? 'no review model is chosen in the settings'
+        : { provider, model }
+    }
+    const route = agent.session.requestHeader()?.config
+    return route === undefined ? 'the session has no model route to review with' : { provider: route.provider, model: route.model }
+  }
+
+  const gate = async (exec: ToolExecution, signal: AbortSignal): Promise<Gated | 'run' | 'cancel'> => {
     // `governs` established that the call has an agent.
     const agent = exec.agent!
     const project = await ctx.workingDirectory.ensure(agent, signal).catch(() => undefined)
     const translation = translateCall(exec.name, exec.arguments, project)
-    if (translation.kind === 'allow') return 'next'
+    if (translation.kind === 'allow') return 'run'
+    // The statement belongs to this call whatever happens to it.
+    const intent = intents.take(agent.session.id, exec.name)
 
     const decisionOptions = options()
     const modelSize = config.modelSize.get()
@@ -141,34 +249,97 @@ export function apply(ctx: Context, config: Config): void {
       verdict => ({ kind: 'verdict', verdict }),
       (error: unknown) => ({ kind: 'error', message: messageOf(error) }),
     )
-    if (signal.aborted) return { kind: 'cancel' }
+    if (signal.aborted) return 'cancel'
+    const stage = stageOf(first)
+    if (stage === undefined) return 'run'
 
+    const situation: Situation = {
+      attended: !unattended(agent),
+      llm: config.review.get() !== 'off',
+      llmOverridesBlock: config.llmOverridesBlock.get(),
+    }
     let second: SecondStage = { kind: 'skipped' }
-    if (first.kind === 'verdict' && wantsReview(first) && config.review.get() === 'host-model') {
-      const route = agent.session.requestHeader()?.config
-      second = route === undefined
-        ? { kind: 'error', message: 'the session has no model route to review with' }
+    if (wantsReview(stage, situation)) {
+      const route = reviewRoute(agent)
+      second = typeof route === 'string'
+        ? { kind: 'error', message: route }
         : await reviewCall(llm, {
           provider: route.provider,
           model: route.model,
+          attended: situation.attended,
+          language: interfaceLanguage(),
           project,
           options: decisionOptions,
-          stage: first.verdict.decision === 'block' ? 'block' : 'review',
+          rules: { allow: config.allowRules.get(), deny: config.denyRules.get(), forbid: config.forbidRules.get() },
+          stage,
           tool: exec.name,
           arguments: exec.arguments,
+          intent,
           history: agent.session.deriveMessages(),
         }, signal)
-      if (signal.aborted) return { kind: 'cancel' }
+      if (signal.aborted) return 'cancel'
     }
+    return { outcome: decide(exec.name, first, second, situation), intent }
+  }
 
-    const outcome = decide(exec.name, first, second)
-    switch (outcome.kind) {
-      case 'run':
-        return 'next'
-      case 'deny':
-        return { kind: 'deny', reason: outcome.reason, info: DENIED_INFO }
-      case 'ask':
-        return { kind: 'ask', reason: outcome.reason, displayReason: outcome.display }
+  /** Ask the user through dsh's approval service, refusing the call when the countdown runs out. */
+  const askUser = async (
+    exec: ToolExecution,
+    ask: Extract<Outcome, { kind: 'ask' }>,
+    intent: string | undefined,
+    signal: AbortSignal,
+  ): Promise<PreToolDecision> => {
+    const approval = ctx.get('approval')
+    if (approval === undefined) {
+      return denied(`${ask.reason}. No approval channel is available, so the call was not executed.`)
+    }
+    const seconds = config.askTimeout.get()
+    const countdown = seconds > 0 ? AbortSignal.timeout(seconds * 1000) : undefined
+    const payload: PromptPayload = {
+      v: 1,
+      ...ask.detail,
+      ...intent === undefined ? {} : { intent },
+      preview: previewOf(exec.arguments),
+      ...countdown === undefined ? {} : { timeoutMs: seconds * 1000 },
+    }
+    let result
+    try {
+      result = await approval.request({
+        agent: exec.agent!,
+        toolName: exec.name,
+        callId: exec.callId,
+        reason: ask.reason,
+        displayReason: { ...ask.display, [PROMPT_KEY]: JSON.stringify(payload) },
+        signal: countdown === undefined ? signal : AbortSignal.any([signal, countdown]),
+      })
+    } catch (error) {
+      return denied(`${ask.reason}. The user could not be asked (${messageOf(error)}), so the call was not executed.`)
+    }
+    if (signal.aborted) return { kind: 'cancel' }
+    switch (result) {
+      case 'allowed-once':
+        return { kind: 'allow' }
+      case 'rejected':
+        return denied(`The user rejected tool "${exec.name}". The call was not executed.`)
+      case 'cancelled':
+        return countdown?.aborted === true
+          ? denied(`${ask.reason}. Nobody answered the approval prompt within ${seconds} seconds, so the call was not executed.`)
+          : denied(`${ask.reason}. The approval prompt was withdrawn, so the call was not executed.`)
+      case 'unavailable':
+        return denied(`${ask.reason}. No approval channel answered, so the call was not executed.`)
+    }
+  }
+
+  let stopIntentTool: (() => void) | undefined
+  /** The intent tool is offered while the LLM review is on. */
+  const syncIntentTool = (): void => {
+    const wanted = accepting && config.review.get() !== 'off'
+    if (wanted && stopIntentTool === undefined) {
+      stopIntentTool = tools.register(intentTool(intents, exec => governs(exec) && config.review.get() !== 'off'))
+    } else if (!wanted && stopIntentTool !== undefined) {
+      stopIntentTool()
+      stopIntentTool = undefined
+      intents.clear()
     }
   }
 
@@ -225,8 +396,9 @@ export function apply(ctx: Context, config: Config): void {
     }
   }
 
-  /** Apply a mode switch made in the settings form. */
-  const syncMode = (): void => {
+  /** Apply a settings change that affects what is registered. */
+  const syncSettings = (): void => {
+    syncIntentTool()
     if (config.mode.get() === 'auto-preset') {
       claimAuto()
       return
@@ -246,18 +418,29 @@ export function apply(ctx: Context, config: Config): void {
       if (!governs(exec)) return next()
       if (!accepting || lifecycle.signal.aborted) return { kind: 'cancel' }
       const signal = AbortSignal.any([exec.signal, lifecycle.signal])
-      const decision = await gate(exec, signal)
-      if (decision === 'next') return next()
-      if (decision.kind !== 'ask') return decision
-      // A later listener's denial, cancellation or own question takes precedence.
-      const downstream = await next()
-      return downstream.kind === 'allow' ? decision : downstream
+      const gated = await gate(exec, signal)
+      if (gated === 'cancel') return { kind: 'cancel' }
+      if (gated === 'run') return next()
+      const { outcome, intent } = gated
+      switch (outcome.kind) {
+        case 'run':
+          return next()
+        case 'deny':
+          return denied(outcome.reason)
+        case 'ask': {
+          // A later listener's denial, cancellation or own question takes precedence over asking.
+          const downstream = await next()
+          if (downstream.kind !== 'allow') return downstream
+          return await askUser(exec, outcome, intent, signal)
+        }
+      }
     }, { prepend: true })
     yield stopListener
 
     yield ctx.on('permission-presets/catalog-changed', claimAuto)
-    yield ctx.on('loader/volatile-update', syncMode)
+    yield ctx.on('loader/volatile-update', syncSettings)
     claimAuto()
+    syncIntentTool()
 
     // Start the service now so the first tool call does not wait for it.
     client.start().catch((error: unknown) => {
@@ -267,6 +450,7 @@ export function apply(ctx: Context, config: Config): void {
     // Disposers start in reverse order, so this runs first.
     yield async () => {
       accepting = false
+      syncIntentTool()
       try {
         await releaseAuto()
       } finally {
@@ -275,6 +459,20 @@ export function apply(ctx: Context, config: Config): void {
       }
     }
   }, 'vulcan-decision-guard lifecycle')
+}
+
+/** Longest call preview the approval card shows. */
+const MAX_PREVIEW_CHARS = 1200
+
+/** A shell command as it was written, otherwise the arguments as JSON. */
+function previewOf(args: unknown): string {
+  const command = typeof args === 'object' && args !== null ? (args as Record<string, unknown>)['command'] : undefined
+  const text = typeof command === 'string' ? command : JSON.stringify(args, null, 2) ?? ''
+  return text.length <= MAX_PREVIEW_CHARS ? text : `${text.slice(0, MAX_PREVIEW_CHARS)}…`
+}
+
+function denied(reason: string): PreToolDecision {
+  return { kind: 'deny', reason, info: DENIED_INFO }
 }
 
 function messageOf(error: unknown): string {
