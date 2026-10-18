@@ -1,0 +1,51 @@
+{
+  "name": "@openvulcan/vulcan-decision",
+  "version": "0.1.0",
+  "description": "Vulcan Decision: the resident service that judges AI coding tool calls with the vulcan-decision-shell model.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OpenVulcan/vulcan-decision-guard.git",
+    "directory": "packages/vulcan-decision"
+  },
+  "type": "module",
+  "bin": {
+    "vulcan-decision": "bin/vulcan-decision.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/client.d.ts",
+      "default": "./lib/client.js"
+    },
+    "./cli": "./lib/cli.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "!lib/**/*.test.*"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.json && node --test \"lib/**/*.test.js\""
+  },
+  "engines": {
+    "node": ">=20.19"
+  },
+  "dependencies": {
+    "onnxruntime-node": "1.30.0",
+    "tokenizers": "0.23.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

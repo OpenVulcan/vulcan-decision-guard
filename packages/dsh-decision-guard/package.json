@@ -22,11 +22,13 @@
   },
   "files": [
     "lib",
+    "!lib/**/*.test.*",
     "cordis.patch.yml"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && tsc -p tsconfig.client.json && node scripts/bundle-client.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
+    "test": "tsc -p tsconfig.json && node --test \"lib/**/*.test.js\""
   },
   "engines": {
     "dsh": ">=0.2.1-rc.2 <0.3.0"
@@ -45,16 +47,13 @@
       ]
     }
   },
-  "optionalDependencies": {
-    "@openvulcan/vulcan-decision-darwin-arm64": "0.1.0",
-    "@openvulcan/vulcan-decision-darwin-x64": "0.1.0",
-    "@openvulcan/vulcan-decision-linux-arm64": "0.1.0",
-    "@openvulcan/vulcan-decision-linux-x64": "0.1.0",
-    "@openvulcan/vulcan-decision-win32-x64": "0.1.0"
+  "dependencies": {
+    "@openvulcan/vulcan-decision": "workspace:*"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.5",
     "@deepseek-ai/dsh-agent": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-llm": "^0.2.1-rc.2",
     "@deepseek-ai/dsh-permission-presets": "^0.2.1-rc.2",
     "@deepseek-ai/dsh-session": "^0.2.1-rc.2",
     "@deepseek-ai/dsh-settings": "^0.2.1-rc.2",
@@ -66,6 +65,7 @@
     "@deepseek-ai/cordis": "4.0.5",
     "@deepseek-ai/cordis-plugin-loader": "1.0.6",
     "@deepseek-ai/dsh-agent": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-llm": "0.2.1-rc.2",
     "@deepseek-ai/dsh-permission-presets": "0.2.1-rc.2",
     "@deepseek-ai/dsh-session": "0.2.1-rc.2",
     "@deepseek-ai/dsh-settings": "0.2.1-rc.2",

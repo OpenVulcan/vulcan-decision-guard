@@ -2,16 +2,19 @@ import type { Context, Volatile } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import { AUTO_PRESET } from '@deepseek-ai/dsh-permission-presets'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
+import type {} from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-settings'
 import { RUN_CODE_NAME, type PreToolDecision, type ToolExecution } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-working-directory'
+import { DecisionClient, type DecisionOptions, type JudgeSettings } from '@openvulcan/vulcan-decision/client'
 
-import { binaryPath } from './binary.js'
-import { DecisionClient, type Verdict } from './decision-client.js'
+import { translateCall } from './calls.js'
+import { decide, wantsReview, type FirstStage, type SecondStage } from './decide.js'
+import { reviewCall } from './review.js'
 
 export const name = 'vulcan-decision-guard'
-export const inject = ['permissionPresets', 'sessions', 'tools', 'workingDirectory']
+export const inject = ['llm', 'permissionPresets', 'sessions', 'tools', 'workingDirectory']
 
 /**
  * How users turn the guard on.
@@ -22,14 +25,14 @@ export const inject = ['permissionPresets', 'sessions', 'tools', 'workingDirecto
  */
 export type Mode = 'auto-preset' | 'standalone'
 
-/** Where verdicts come from: the OpenVulcan cloud, or the model running on this machine. */
+/** Where verdicts come from: the OpenVulcan cloud (not open yet), or the model on this machine. */
 export type Backend = 'cloud' | 'local'
 
 /** Size of the local `vulcan-decision-shell` model. */
 export type ModelSize = '0.2b' | '0.4b' | '0.6b'
 
 /**
- * What happens to a call the decision model is unsure about.
+ * What happens to a call the decision model did not allow.
  *
  * - `host-model`: the current session's model reviews it; the user is asked when it still does not allow.
  * - `off`: the user is asked directly.
@@ -43,9 +46,12 @@ export type Review = 'host-model' | 'off'
 export interface Config {
   mode: Volatile<Mode>
   backend: Volatile<Backend>
-  /** Absent means the size recommended for this device. */
+  /** Absent means the largest installed size this device suits. */
   modelSize: Volatile<ModelSize | undefined>
   review: Volatile<Review>
+  crossProjectWrites: Volatile<DecisionOptions['cross_project_writes']>
+  databaseReset: Volatile<DecisionOptions['database_reset']>
+  projectReset: Volatile<DecisionOptions['project_reset']>
 }
 
 export const Config = Schema.object({
@@ -54,27 +60,43 @@ export const Config = Schema.object({
     .description('auto-preset: appears as the Auto permission preset. standalone: judges every session on top of its preset.')
     .volatile(),
   backend: Schema.union(['cloud', 'local'] as const)
-    .default('cloud')
-    .description('cloud: OpenVulcan judges calls and needs an OpenVulcan sign-in. local: the model runs on this machine.')
+    .default('local')
+    .description('local: the model runs on this machine. cloud: OpenVulcan judges calls; not available yet.')
     .volatile(),
   modelSize: Schema.union(['0.2b', '0.4b', '0.6b'] as const)
-    .description('Local model size; omitted means the size recommended for this device.')
+    .description('Local model size; omitted means the largest installed size this device suits.')
     .volatile(),
   review: Schema.union(['host-model', 'off'] as const)
     .default('host-model')
-    .description('host-model: the session model reviews uncertain calls before the user is asked. off: uncertain calls go to the user.')
+    .description('host-model: the session model reviews calls the decision model did not allow before the user is asked. off: those calls go to the user.')
+    .volatile(),
+  crossProjectWrites: Schema.union(['allow', 'review'] as const)
+    .default('allow')
+    .description('Ordinary writes outside the project: allow them, or ask first.')
+    .volatile(),
+  databaseReset: Schema.union(['confirm', 'allow'] as const)
+    .default('confirm')
+    .description('Database drops, truncations and unrestricted data writes: confirm first, or allow.')
+    .volatile(),
+  projectReset: Schema.union(['confirm', 'allow'] as const)
+    .default('confirm')
+    .description('Deleting or resetting the whole current project or its history: confirm first, or allow.')
     .volatile(),
 })
 
 /** Preset that sessions still on `auto` move to when the guard is removed. */
 const FALLBACK_PRESET = 'workspace-write'
 
+/** Structured error identity of a final denial. */
+const DENIED_INFO = { name: 'VulcanDecisionDeniedError', code: 'VULCAN_DECISION_DENIED' } as const
+
 /** Install the Vulcan Decision gate and, in `auto-preset` mode, the Auto preset. */
 export function apply(ctx: Context, config: Config): void {
   // Retain the injected services while this context drains on disposal.
   const permissionPresets = ctx.permissionPresets
   const sessions = ctx.sessions
-  const client = new DecisionClient(binaryPath)
+  const llm = ctx.llm
+  const client = new DecisionClient()
   const lifecycle = new AbortController()
   let accepting = true
   let releasing = false
@@ -89,23 +111,64 @@ export function apply(ctx: Context, config: Config): void {
     return ownsAuto && permissionPresets.current(agent.session) === AUTO_PRESET
   }
 
-  const judge = async (exec: ToolExecution, signal: AbortSignal): Promise<Verdict> => {
-    try {
-      const agent = exec.agent
-      const cwd = agent === undefined ? undefined : await ctx.workingDirectory.ensure(agent, signal)
-      return await client.judge({
-        host: 'dsh',
-        ...agent === undefined ? {} : { session_id: String(agent.session.id) },
-        ...cwd === undefined ? {} : { cwd },
-        tool: exec.name,
-        arguments: exec.arguments,
-      }, signal)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      return {
-        decision: 'deny',
-        reason: `Vulcan Decision could not judge tool "${exec.name}", so it was blocked: ${message}`,
-      }
+  const options = (): DecisionOptions => ({
+    cross_project_writes: config.crossProjectWrites.get(),
+    database_reset: config.databaseReset.get(),
+    project_reset: config.projectReset.get(),
+  })
+
+  const gate = async (exec: ToolExecution, signal: AbortSignal): Promise<PreToolDecision | 'next'> => {
+    // `governs` established that the call has an agent.
+    const agent = exec.agent!
+    const project = await ctx.workingDirectory.ensure(agent, signal).catch(() => undefined)
+    const translation = translateCall(exec.name, exec.arguments, project)
+    if (translation.kind === 'allow') return 'next'
+
+    const decisionOptions = options()
+    const modelSize = config.modelSize.get()
+    const settings: JudgeSettings = {
+      backend: config.backend.get(),
+      ...modelSize === undefined ? {} : { model_size: modelSize },
+      options: decisionOptions,
+    }
+    const first: FirstStage = await client.judge({
+      host: 'dsh',
+      session_id: String(agent.session.id),
+      ...project === undefined ? {} : { project },
+      tool: translation.tool,
+      arguments: translation.arguments,
+    }, settings, signal).then(
+      verdict => ({ kind: 'verdict', verdict }),
+      (error: unknown) => ({ kind: 'error', message: messageOf(error) }),
+    )
+    if (signal.aborted) return { kind: 'cancel' }
+
+    let second: SecondStage = { kind: 'skipped' }
+    if (first.kind === 'verdict' && wantsReview(first) && config.review.get() === 'host-model') {
+      const route = agent.session.requestHeader()?.config
+      second = route === undefined
+        ? { kind: 'error', message: 'the session has no model route to review with' }
+        : await reviewCall(llm, {
+          provider: route.provider,
+          model: route.model,
+          project,
+          options: decisionOptions,
+          stage: first.verdict.decision === 'block' ? 'block' : 'review',
+          tool: exec.name,
+          arguments: exec.arguments,
+          history: agent.session.deriveMessages(),
+        }, signal)
+      if (signal.aborted) return { kind: 'cancel' }
+    }
+
+    const outcome = decide(exec.name, first, second)
+    switch (outcome.kind) {
+      case 'run':
+        return 'next'
+      case 'deny':
+        return { kind: 'deny', reason: outcome.reason, info: DENIED_INFO }
+      case 'ask':
+        return { kind: 'ask', reason: outcome.reason, displayReason: outcome.display }
     }
   }
 
@@ -140,7 +203,7 @@ export function apply(ctx: Context, config: Config): void {
       }
     } catch (error) {
       // A concurrent registration won the slot; the plugin keeps loading.
-      ctx.logger.warn(`cannot register the Auto permission preset: ${error instanceof Error ? error.message : String(error)}`)
+      ctx.logger.warn(`cannot register the Auto permission preset: ${messageOf(error)}`)
     } finally {
       claiming = false
     }
@@ -169,7 +232,7 @@ export function apply(ctx: Context, config: Config): void {
       return
     }
     releaseAuto().catch((error: unknown) => {
-      ctx.logger.warn(`cannot withdraw the Auto permission preset: ${error instanceof Error ? error.message : String(error)}`)
+      ctx.logger.warn(`cannot withdraw the Auto permission preset: ${messageOf(error)}`)
     })
   }
 
@@ -183,27 +246,12 @@ export function apply(ctx: Context, config: Config): void {
       if (!governs(exec)) return next()
       if (!accepting || lifecycle.signal.aborted) return { kind: 'cancel' }
       const signal = AbortSignal.any([exec.signal, lifecycle.signal])
-      const verdict = await judge(exec, signal)
-      if (signal.aborted) return { kind: 'cancel' }
-      switch (verdict.decision) {
-        case 'allow':
-          return next()
-        case 'deny':
-          return { kind: 'deny', reason: verdict.reason }
-        case 'ask': {
-          // A later listener's denial, cancellation or own question takes precedence.
-          const downstream = await next()
-          if (downstream.kind !== 'allow') return downstream
-          return {
-            kind: 'ask',
-            reason: verdict.reason,
-            displayReason: {
-              en: `Vulcan Decision asks you to confirm this call: ${verdict.reason}`,
-              zh: `Vulcan Decision 需要你确认此调用：${verdict.reason}`,
-            },
-          }
-        }
-      }
+      const decision = await gate(exec, signal)
+      if (decision === 'next') return next()
+      if (decision.kind !== 'ask') return decision
+      // A later listener's denial, cancellation or own question takes precedence.
+      const downstream = await next()
+      return downstream.kind === 'allow' ? decision : downstream
     }, { prepend: true })
     yield stopListener
 
@@ -213,7 +261,7 @@ export function apply(ctx: Context, config: Config): void {
 
     // Start the service now so the first tool call does not wait for it.
     client.start().catch((error: unknown) => {
-      ctx.logger.warn(`decision service did not start: ${error instanceof Error ? error.message : String(error)}`)
+      ctx.logger.warn(`decision service did not start: ${messageOf(error)}`)
     })
 
     // Disposers start in reverse order, so this runs first.
@@ -227,4 +275,8 @@ export function apply(ctx: Context, config: Config): void {
       }
     }
   }, 'vulcan-decision-guard lifecycle')
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }

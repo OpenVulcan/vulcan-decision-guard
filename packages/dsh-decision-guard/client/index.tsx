@@ -41,7 +41,10 @@ const zh = {
   'summary': '每次工具调用前由 Vulcan Decision 判定是否放行。',
   'status.title': '状态',
   'status.decision': '判定',
-  'status.decision.none': '当前版本尚未提供判定后端，受管控的工具调用一律拒绝',
+  'status.decision.local': '{model}。服务在首次判定时启动；模型未安装或无法判定时，受管控的调用会询问你',
+  'status.decision.cloud': 'OpenVulcan 云端尚未开放，受管控的调用会询问你。请改用本机模型',
+  'status.decision.recommended': '本机模型，按本机配置选择已安装的尺寸',
+  'status.decision.size': '本机模型 {size}',
   'status.auto': 'Auto 权限预设',
   'status.auto.provided': '由 Vulcan Decision 提供，在权限选择器中选择「自动审查」即可启用',
   'status.auto.held': '被「自动授权审查」占用，见下方冲突提示',
@@ -50,10 +53,12 @@ const zh = {
   'status.unknown': '读取中…',
   'tone.ok': '正常',
   'tone.warn': '注意',
-  'tone.blocked': '拒绝中',
+  'tone.ask': '询问中',
   'tone.off': '未使用',
 
-  'preview': '判定后端、复核与账号仍在开发中：这里的选择会保存，相应功能上线后生效。',
+  'install.title': '安装本机模型',
+  'install.body': '模型目前从本地目录安装，下载功能尚未开放。在终端执行下列命令安装或查看状态：',
+  'install.status': '查看服务与已安装模型：',
   'mode.title': '接入方式',
   'mode.auto-preset': '自动预设',
   'mode.auto-preset.hint': '在权限选择器中提供「自动审查」，只判定选择它的会话。该预设固定为完全权限，不使用文件沙箱。',
@@ -61,17 +66,34 @@ const zh = {
   'mode.standalone.hint': '判定所有会话，叠加在会话所选的权限预设之上，保留其文件沙箱。',
   'backend.title': '判定后端',
   'backend.cloud': 'OpenVulcan 云端',
-  'backend.cloud.hint': '工具调用的内容发送到 OpenVulcan 判定，需要登录 OpenVulcan 账号。本机无需额外算力。',
+  'backend.cloud.hint': '尚未开放。工具调用的内容将发送到 OpenVulcan 判定，需要登录 OpenVulcan 账号。',
   'backend.local': '本机模型',
-  'backend.local.hint': '在本机运行 vulcan-decision-shell 模型，数据不出本机。首次使用时下载模型。',
+  'backend.local.hint': '在本机运行 vulcan-decision-shell 模型，工具调用的内容不出本机。',
   'model.title': '模型尺寸',
   'model.recommended': '按本机配置推荐',
-  'model.hint': '尺寸越大判定越准确，占用的内存与时间也越多。',
-  'review.title': '拿不准的调用',
+  'model.hint': '尺寸越大判定越准确，占用的内存与时间也越多。所选尺寸必须已安装。',
+  'review.title': '模型未放行的调用',
   'review.host-model': '先由当前会话的模型复核',
-  'review.host-model.hint': '复核仍未放行时再询问你。复核会消耗当前会话所用模型的用量。',
-  'review.off': '直接询问我',
-  'review.off.hint': '不调用其他模型，由你决定是否放行。',
+  'review.host-model.hint': '需确认的调用经复核放行后直接执行，否则询问你；被拦截的调用复核最多改为询问你。复核会消耗当前会话所用模型的用量。',
+  'review.off': '不复核',
+  'review.off.hint': '需确认的调用直接询问你，被拦截的调用直接拒绝。',
+  'options.title': '授权选项',
+  'options.hint': '判定模型按这三项设置判断，以下是模型训练时使用的固定选项。',
+  'cross.title': '项目外的普通写入',
+  'cross.allow': '允许',
+  'cross.allow.hint': '在项目外创建或修改文件可以直接执行；大范围删除不在此列。',
+  'cross.review': '先确认',
+  'cross.review.hint': '在项目外的写入需要确认。',
+  'database.title': '数据库重置',
+  'database.confirm': '先确认',
+  'database.confirm.hint': '删除库表、清空数据或不受限的数据写入需要确认。',
+  'database.allow': '允许',
+  'database.allow.hint': '允许这类数据库操作。不同环境的数据库请分别考虑。',
+  'project.title': '重置当前项目',
+  'project.confirm': '先确认',
+  'project.confirm.hint': '删除或重置整个当前项目、改写其版本历史需要确认。',
+  'project.allow': '允许',
+  'project.allow.hint': '只允许针对当前项目；其他项目、上级目录与系统不在此列。',
   'account.title': 'OpenVulcan 账号',
   'account.none': '尚未开放。云端判定上线后在这里登录。',
   'account.signIn': '登录',
@@ -99,7 +121,10 @@ const en: Record<Key, string> = {
   'summary': 'Vulcan Decision judges every tool call before it runs.',
   'status.title': 'Status',
   'status.decision': 'Decisions',
-  'status.decision.none': 'This version has no decision backend yet, so every governed tool call is denied',
+  'status.decision.local': '{model}. The service starts on the first decision; when the model is not installed or cannot judge, governed calls ask you',
+  'status.decision.cloud': 'OpenVulcan cloud is not available yet, so governed calls ask you. Choose the local model',
+  'status.decision.recommended': 'Local model, the installed size this machine suits',
+  'status.decision.size': 'Local model {size}',
   'status.auto': 'Auto permission preset',
   'status.auto.provided': 'Provided by Vulcan Decision; choose Auto in the permission picker to use it',
   'status.auto.held': 'Held by Auto review; see the conflict notice below',
@@ -108,10 +133,12 @@ const en: Record<Key, string> = {
   'status.unknown': 'Loading…',
   'tone.ok': 'OK',
   'tone.warn': 'Attention',
-  'tone.blocked': 'Denying',
+  'tone.ask': 'Asking',
   'tone.off': 'Not used',
 
-  'preview': 'The decision backend, review and account are still in development: choices made here are saved and take effect when those features ship.',
+  'install.title': 'Install the local model',
+  'install.body': 'Models are installed from a local directory for now; downloads are not available yet. Run this in a terminal to install one:',
+  'install.status': 'Check the service and installed models:',
   'mode.title': 'How the guard is turned on',
   'mode.auto-preset': 'Auto preset',
   'mode.auto-preset.hint': 'Adds Auto to the permission picker and judges only sessions that choose it. That preset always has full access and no file sandbox.',
@@ -119,17 +146,34 @@ const en: Record<Key, string> = {
   'mode.standalone.hint': 'Judges every session on top of the permission preset it chose, keeping that preset\'s file sandbox.',
   'backend.title': 'Decision backend',
   'backend.cloud': 'OpenVulcan cloud',
-  'backend.cloud.hint': 'Tool calls are sent to OpenVulcan to be judged; requires an OpenVulcan sign-in. Needs no extra computing power here.',
+  'backend.cloud.hint': 'Not available yet. Tool calls will be sent to OpenVulcan to be judged, with an OpenVulcan sign-in.',
   'backend.local': 'Local model',
-  'backend.local.hint': 'Runs the vulcan-decision-shell model on this machine, so nothing leaves it. The model downloads on first use.',
+  'backend.local.hint': 'Runs the vulcan-decision-shell model on this machine, so tool calls never leave it.',
   'model.title': 'Model size',
   'model.recommended': 'Recommended for this machine',
-  'model.hint': 'Larger sizes judge more accurately and use more memory and time.',
-  'review.title': 'Calls the model is unsure about',
+  'model.hint': 'Larger sizes judge more accurately and use more memory and time. The chosen size must be installed.',
+  'review.title': 'Calls the model did not allow',
   'review.host-model': 'Review with the session\'s model first',
-  'review.host-model.hint': 'You are asked only when the review does not allow the call. Reviews count toward the session model\'s usage.',
-  'review.off': 'Ask me directly',
-  'review.off.hint': 'No other model is called; you decide whether the call runs.',
+  'review.host-model.hint': 'A call that needs confirmation runs when the review allows it, otherwise you are asked; a blocked call can at most be turned into a question. Reviews count toward the session model\'s usage.',
+  'review.off': 'No review',
+  'review.off.hint': 'Calls that need confirmation ask you; blocked calls are denied.',
+  'options.title': 'Authorization options',
+  'options.hint': 'The decision model judges with these three settings; they are the fixed options it was trained with.',
+  'cross.title': 'Ordinary writes outside the project',
+  'cross.allow': 'Allow',
+  'cross.allow.hint': 'Creating or changing files outside the project runs directly; broad deletion is not covered.',
+  'cross.review': 'Confirm first',
+  'cross.review.hint': 'Writes outside the project need confirmation.',
+  'database.title': 'Database resets',
+  'database.confirm': 'Confirm first',
+  'database.confirm.hint': 'Dropping tables, truncating data or unrestricted data writes need confirmation.',
+  'database.allow': 'Allow',
+  'database.allow.hint': 'These database operations are allowed. Consider each environment\'s database separately.',
+  'project.title': 'Resetting the current project',
+  'project.confirm': 'Confirm first',
+  'project.confirm.hint': 'Deleting or resetting the whole current project, or rewriting its history, needs confirmation.',
+  'project.allow': 'Allow',
+  'project.allow.hint': 'Only for the current project; other projects, parent directories and the system are not covered.',
   'account.title': 'OpenVulcan account',
   'account.none': 'Not available yet. Sign in here once cloud decisions ship.',
   'account.signIn': 'Sign in',
@@ -147,9 +191,16 @@ interface GuardSettings {
   readonly backend: 'cloud' | 'local'
   readonly modelSize?: '0.2b' | '0.4b' | '0.6b' | undefined
   readonly review: 'host-model' | 'off'
+  readonly crossProjectWrites: 'allow' | 'review'
+  readonly databaseReset: 'confirm' | 'allow'
+  readonly projectReset: 'confirm' | 'allow'
 }
 
 type Field = keyof GuardSettings
+
+/** Terminal commands shown for installing a model and checking the service. */
+const INSTALL_COMMAND = 'npx @openvulcan/vulcan-decision model install <model directory> --size 0.2b'
+const STATUS_COMMAND = 'npx @openvulcan/vulcan-decision status'
 
 /** The model sizes offered, in order; `''` stands for the device recommendation (field unset). */
 const MODEL_SIZES = ['', '0.2b', '0.4b', '0.6b'] as const
@@ -228,6 +279,11 @@ const styles = {
   radio: { margin: '3px 0 0', accentColor: 'var(--dsw-alias-state-business-primary)' },
   divider: { borderTop: '1px solid var(--dsw-alias-border-l2)' },
   select: { alignSelf: 'flex-start', minWidth: 220, padding: '6px 8px', borderRadius: 8, fontSize: 13 },
+  command: {
+    display: 'block', padding: '6px 8px', borderRadius: 6, fontSize: 12, lineHeight: '18px', overflowWrap: 'anywhere',
+    fontFamily: 'var(--dsw-font-mono, ui-monospace, monospace)', color: 'var(--dsw-alias-label-primary)',
+    background: 'var(--dsw-alias-bg-layer-1)',
+  },
   notice: {
     margin: 0, padding: '10px 12px', borderRadius: 8, fontSize: 12, lineHeight: '18px',
     color: 'var(--dsw-alias-label-secondary)', background: 'var(--dsw-alias-bg-layer-2)',
@@ -357,16 +413,29 @@ export function apply(ctx: ClientContext): void {
     return { tone: 'quiet', text: 'status.auto.pending', toneText: 'status.auto.pending' } as const
   }
 
-  function StatusSection({ t, mode }: { t: (key: Key) => string; mode: GuardSettings['mode'] | undefined }) {
+  /**
+   * What the page shows about decisions. Whether a model is installed is known only to the
+   * service on this machine, which dsh offers no channel to read from here, so the row states the
+   * saved choice and what happens when the model is missing.
+   */
+  function decisionStatus(value: GuardSettings | undefined, t: (key: Key) => string) {
+    if (value === undefined) return { tone: 'quiet', text: t('status.unknown'), toneText: t('status.unknown') } as const
+    if (value.backend === 'cloud') return { tone: 'warning', text: t('status.decision.cloud'), toneText: t('tone.ask') } as const
+    const model = value.modelSize === undefined ? t('status.decision.recommended') : t('status.decision.size').replace('{size}', value.modelSize.toUpperCase())
+    return { tone: 'success', text: t('status.decision.local').replace('{model}', model), toneText: t('tone.ok') } as const
+  }
+
+  function StatusSection({ t, value }: { t: (key: Key) => string; value: GuardSettings | undefined }) {
     const heldByReview = useSyncExternalStore(autoReview.subscribe, autoReview.getSnapshot)
     const listed = useSyncExternalStore(autoListed.subscribe, autoListed.getSnapshot)
-    const auto = autoStatus(mode, heldByReview, listed)
+    const auto = autoStatus(value?.mode, heldByReview, listed)
+    const decision = decisionStatus(value, t)
     return (
       <section style={styles.section}>
         <h4 style={styles.heading}>{t('status.title')}</h4>
         <div style={styles.card}>
-          <StatusRow label={t('status.decision')} tone="danger" toneLabel={t('tone.blocked')}>
-            {t('status.decision.none')}
+          <StatusRow label={t('status.decision')} tone={decision.tone} toneLabel={decision.toneText}>
+            {decision.text}
           </StatusRow>
           <div style={styles.divider} />
           <StatusRow label={t('status.auto')} tone={auto.tone} toneLabel={t(auto.toneText)}>
@@ -406,14 +475,16 @@ export function apply(ctx: ClientContext): void {
     )
   }
 
-  function ChoiceGroup<V extends string>({ title, values, current, disabled, onChoose, t, prefix }: {
+  function ChoiceGroup<V extends string>({ title, values, current, disabled, unavailable = [], onChoose, t, prefix }: {
     title: string
     values: readonly V[]
     current: V
     disabled: boolean
+    /** Values shown but not selectable yet. */
+    unavailable?: readonly V[]
     onChoose: (value: V) => void
     t: (key: Key) => string
-    prefix: 'mode' | 'backend' | 'review'
+    prefix: 'mode' | 'backend' | 'review' | 'cross' | 'database' | 'project'
   }) {
     const name = useId()
     return (
@@ -428,7 +499,7 @@ export function apply(ctx: ClientContext): void {
               current={current}
               title={t(`${prefix}.${value}` as Key)}
               hint={t(`${prefix}.${value}.hint` as Key)}
-              disabled={disabled}
+              disabled={disabled || unavailable.includes(value)}
               onChoose={onChoose}
               first={index === 0}
             />
@@ -475,7 +546,7 @@ export function apply(ctx: ClientContext): void {
 
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-        <StatusSection t={t} mode={value?.mode} />
+        <StatusSection t={t} value={value} />
         <SettingsForm
           labels={{
             unavailable: t('form.unavailable'),
@@ -505,13 +576,13 @@ export function apply(ctx: ClientContext): void {
               onChoose={(next) => { edit('mode', next) }}
               t={t}
             />
-            <p style={styles.notice}>{t('preview')}</p>
             <ChoiceGroup
               title={t('backend.title')}
               prefix="backend"
-              values={['cloud', 'local'] as const}
+              values={['local', 'cloud'] as const}
               current={backend}
               disabled={disabled}
+              unavailable={['cloud']}
               onChoose={(next) => { edit('backend', next) }}
               t={t}
             />
@@ -531,9 +602,47 @@ export function apply(ctx: ClientContext): void {
                     ))}
                   </select>
                   <p style={styles.hint}>{t('model.hint')}</p>
+                  <div style={{ ...styles.notice, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <strong style={{ fontWeight: 500 }}>{t('install.title')}</strong>
+                    <span>{t('install.body')}</span>
+                    <code style={styles.command}>{INSTALL_COMMAND}</code>
+                    <span>{t('install.status')}</span>
+                    <code style={styles.command}>{STATUS_COMMAND}</code>
+                  </div>
                 </div>
               )
               : null}
+            <section style={styles.section}>
+              <h4 style={styles.heading}>{t('options.title')}</h4>
+              <p style={styles.hint}>{t('options.hint')}</p>
+              <ChoiceGroup
+                title={t('cross.title')}
+                prefix="cross"
+                values={['allow', 'review'] as const}
+                current={current('crossProjectWrites') as GuardSettings['crossProjectWrites']}
+                disabled={disabled}
+                onChoose={(next) => { edit('crossProjectWrites', next) }}
+                t={t}
+              />
+              <ChoiceGroup
+                title={t('database.title')}
+                prefix="database"
+                values={['confirm', 'allow'] as const}
+                current={current('databaseReset') as GuardSettings['databaseReset']}
+                disabled={disabled}
+                onChoose={(next) => { edit('databaseReset', next) }}
+                t={t}
+              />
+              <ChoiceGroup
+                title={t('project.title')}
+                prefix="project"
+                values={['confirm', 'allow'] as const}
+                current={current('projectReset') as GuardSettings['projectReset']}
+                disabled={disabled}
+                onChoose={(next) => { edit('projectReset', next) }}
+                t={t}
+              />
+            </section>
             <ChoiceGroup
               title={t('review.title')}
               prefix="review"

@@ -1,217 +1,253 @@
-# Vulcan Decision Guard 架构草案
+# Vulcan Decision Guard 架构
 
-> 状态：第一版骨架（仅 dsh），判定后端尚未实现。宿主能力以各宿主官方文档为准，标注“待调查”的条目在实现前必须先验证。
+> 状态：v1 预览版，只适配 dsh。宿主能力以各宿主源码与官方文档为准；标注“待调查”的条目在实现前必须先验证。
 
 ## 一、定位
 
-Vulcan Decision Guard 是一个独立项目，为 Vulcan Code 之外的 AI 编码宿主（Claude Code、Codex、
-DeepSeek harness 等）提供工具调用权限守卫。它拥有自己的账号体系（OpenVulcan 账号与 OAuth 登录）、
-配置与发布节奏，不依赖 Vulcan Code 仓库。
+Vulcan Decision Guard 是一个独立项目，为 Vulcan Code 之外的 AI 编码宿主（DeepSeek harness、Claude Code、
+Codex 等）提供工具调用权限守卫。它拥有自己的账号体系（OpenVulcan 账号与 OAuth 登录，尚未开放）、配置与
+发布节奏，不依赖 Vulcan Code 仓库。
 
 与 Vulcan Code 的关系是**参考升级**：Vulcan Code 的权限判定实现只作为参考，本仓库按需移植并自行维护；
 每次移植在提交说明中记录所参考的 Vulcan Code 提交，不建立代码依赖。
 
-## 二、两个版本
+## 二、组成
 
-| 版本 | 判定后端 | 分发内容 | 适用 |
-| --- | --- | --- | --- |
-| 云端精简版 | OpenVulcan 云端判定 | 仅客户端可执行文件，不含 ONNX Runtime 与模型 | 安装最快，无本机算力要求 |
-| 完整版 | 本机 ONNX 模型，或 OpenVulcan 云端 | 可执行文件 + ONNX Runtime 动态库；模型包首次使用时下载并校验 | 数据不出本机，可离线 |
+| 包 | 内容 |
+| --- | --- |
+| `@openvulcan/vulcan-decision` | 常驻判定服务、宿主共用的客户端（`/client`）与命令行 `vulcan-decision` |
+| `@openvulcan/dsh-decision-guard` | dsh 插件：Host 端 `src/`，浏览器端 `client/`（构建为 `lib/client.js`） |
 
-两个版本是同一份源码按 Cargo feature 构建的结果，判定协议、结论映射与失败语义完全一致。
+全部用 TypeScript 编写，运行在 Node ≥ 20.19 上。推理依赖 `onnxruntime-node`（版本见
+`packages/vulcan-decision/package.json`），它的 npm 包自带 Windows x64/arm64、macOS x64/arm64 与 Linux
+x64/arm64 的 CPU 运行库，Windows 另带 DirectML；分词用 `tokenizers` 的 Node 绑定。因此用户不需要 Rust、
+Python，也不需要单独下载 ONNX Runtime。
 
-模型：`vulcan-decision-shell-{0.2b|0.4b|0.6b}-v1-preview`。尺寸是用户设置，默认依设备探测推荐；
-版本号与尺寸不进入仓库名、包名或代码常量之外的任何位置。
+此前的 Rust 原生服务与按平台分发的 npm 包已移除：用户的 CPU 与系统组合太多，原生构建矩阵与 ONNX Runtime
+下载的维护成本高于收益，而 Node 已是每个宿主的运行环境。
 
 ## 三、判定管线
 
 每次受管控的工具调用依次经过：
 
-1. **确定性规则**：可直接得出结论的调用（如工作区内只读操作）不进入模型。
+1. **宿主换算**：宿主插件把自己的工具调用换算成模型训练时见过的工具形状（见第六节），可直接得出结论的
+   调用（宿主内部工具、项目内的读写）不进入模型。
 2. **判定模型**：给出 allow / review / block。
-3. **复核 LLM**：只处理判定模型给出 review 的调用。复核模型与标准由宿主适配决定（见第五节）。
+3. **复核 LLM**：处理模型未放行（review 或 block）的调用，由用户设置开启或关闭。
 4. **用户**：仅在宿主支持“询问用户”时存在。
 
-**失败即拒绝**：任何一层出错、超时、无法连接或输入超限，都不得放行。这是全项目唯一不可协商的规则，
-各宿主适配必须用该宿主的机制落实（见第五节“失败语义”）。
+结论映射（dsh 适配，`packages/dsh-decision-guard/src/decide.ts`）：
 
-## 四、进程结构
+| 判定模型 | 复核 LLM | 结果 |
+| --- | --- | --- |
+| allow | — | 执行 |
+| review | 放行 | 执行 |
+| review | 未放行 / 失败 / 关闭 | 询问用户 |
+| block | 认为已获授权 | 询问用户 |
+| block | 未放行 / 失败 / 关闭 | 拒绝，理由返回给模型，并要求不得换形式重试 |
+| 服务或模型错误 | — | 询问用户 |
 
-判定不能在每次工具调用时冷启动：本机模型加载需要数秒，云端连接也需要握手。因此判定由每个用户
-唯一的常驻进程 `vulcan-decision serve` 承担，所有宿主插件共用它。
+**任何错误都不得放行**：这是全项目唯一不可协商的规则。复核 LLM 永远不能单独放行被拦截的调用；不能询问
+用户的宿主或会话，把“询问”按拒绝处理。
 
-- **端点**：Windows 为 named pipe `\\.\pipe\vulcan-decision-<用户名>.sock`，Unix 为
-  `~/.vulcan-decision/run/serve.sock`（目录权限 0700）。端点位置只在 `decision-core::endpoint_path`
-  定义一次，其他语言通过 `vulcan-decision endpoint` 读取，不自行拼接。
-- **协议**：每行一个 JSON 帧（上限 16 MiB），每个请求携带 `contract` 版本；版本不一致时服务返回
-  `contract_mismatch`。`ensure` 发现旧版服务时先请求其退出，再启动当前版本。
-- **单例**：`serve.lock` 文件锁保证同一用户只有一个服务进程。
-- **生命周期**：无连接且空闲 30 分钟后退出。宿主插件运行期间保持一条 keepalive 连接，因此服务
-  不会在宿主运行时退出；keepalive 断开时插件在下一次判定前重新拉起服务。
-- **启动**：`ensure` 以完全脱离的方式启动 `serve`（Windows 还会取消标准句柄继承，否则读取 `ensure`
-  输出的宿主会一直等到服务退出）。
+## 四、判定服务
 
-子命令：
+判定不能在每次工具调用时冷启动：加载模型需要数百毫秒到数秒。因此判定由每个用户唯一的常驻服务
+`vulcan-decision serve` 承担，所有宿主插件共用它。
+
+- **数据目录**：`~/.vulcan-decision/`（仅属主可访问），环境变量 `VULCAN_DECISION_HOME` 可改到别处，用于测试
+  与隔离环境。模型包在 `models/<模型 id>/`，服务日志在 `serve.log`。
+- **端点**：唯一定义在 `src/paths.ts` 的 `endpointPath()`。Windows 为 named pipe
+  `\\.\pipe\vulcan-decision-<用户名>-<数据目录哈希>`，不同数据目录各有一个服务；Unix 为数据目录下的
+  `run/serve.sock`。
+- **协议**（`src/protocol.ts`）：每行一个 JSON 帧（上限 16 MiB）。请求为 `ping`、`judge`、`status` 与
+  `shutdown`，都携带 `contract` 版本（`shutdown` 除外，以便升级时替换旧服务）；版本不一致时服务返回
+  `contract_mismatch`，客户端先请求旧服务退出、等待其消失，再启动当前版本。错误码为 `invalid_request`、
+  `backend_unavailable`、`model_not_installed`、`model_failed`，宿主不得把其中任何一个当作放行。
+- **启动**：客户端（`DecisionClient`）以 `process.execPath` 完全脱离地运行本包的 `bin/vulcan-decision.js serve`，
+  并设置 `ELECTRON_RUN_AS_NODE=1`，因此在 Electron 宿主内同样可用。启动最多等待 15 秒。
+- **生命周期**：宿主插件运行期间保持一条 keepalive 连接；服务在没有连接且空闲 30 分钟后退出，模型空闲
+  15 分钟后卸载。传输失败时客户端重试一次（必要时重新拉起服务）。
+- **推理**：同一模型的推理串行执行以限制内存；一次请求中的多个调用按模型的 `micro_batch` 分批。
+  执行设备默认 CPU，环境变量 `VULCAN_DECISION_DEVICE=dml|cuda` 可试用 GPU（实验性）。
+
+命令行（`npx @openvulcan/vulcan-decision …`）：
 
 | 子命令 | 作用 |
 | --- | --- |
 | `serve` | 常驻判定服务 |
-| `ensure` | 确保当前版本的服务在运行，必要时启动；失败返回非零 |
-| `endpoint` | 输出 `{"endpoint","contract","version"}` |
-| `status` / `stop` | 查询与停止服务 |
-| `login` / `logout`（规划） | OpenVulcan 账号（OAuth）；令牌不写入日志、错误或命令输出 |
-| `model list\|use\|install\|verify`（规划） | 完整版的模型包管理 |
+| `start` / `stop` / `status` | 启动、停止、查看服务与已安装模型（`status` 不会启动服务） |
+| `model list` / `model install <目录> --size <尺寸> [--id <id>]` / `model remove <id 或尺寸>` | 模型包管理；安装与删除前先停止服务 |
+| `judge --input <文件>` | 经服务判定（调试） |
+| `eval --input <文件> [--size <尺寸>]` | 在当前进程内对已渲染的输入打分（调试与对照） |
 
-实测（Windows，空判定）：插件首次 `ensure` + `endpoint` + keepalive 约 140 ms，只发生一次；之后每次
-判定在宿主进程内约 0.2 ms（p95 0.4 ms）。云端精简版的 `serve` 只持有账号会话与连接，不加载模型。
+## 五、模型与模型包
 
-当前尚无判定后端，服务对每个调用都返回拒绝。
+模型：`vulcan-decision-shell-{0.2b|0.4b|0.6b}-v1-preview`，当前只有 0.2B。尺寸是用户设置；省略时选择
+已安装的、本机内存适合的最大尺寸（总内存 < 12 GiB 为 0.2B，< 24 GiB 为 0.4B，其余 0.6B）。
 
-## 五、宿主适配
+**输入格式**（`src/render.ts`，与训练格式一致，不额外补充任务描述、历史消息或文件状态）：
 
-每个宿主的能力不同，适配层负责把同一个判定结论映射为该宿主能执行的行为。**第一版只适配 dsh**；
-Claude Code 与 Codex 的调查结论保留在下表供后续阶段参考，两者需要每次调用启动的 hook 客户端，
-届时再加入。
+```text
+Project: <项目根目录>          （未知时省略）
+Tool: <工具名>
+Arguments: <实际参数的紧凑 JSON，键保持原顺序>
+```
 
-| 能力 | DeepSeek harness（dsh，第一个适配） | Claude Code | Codex |
+模型另有三项授权选项（`cross_project_writes`、`database_reset`、`project_reset`），对应设置页的“授权选项”。
+图的输入为 `input_ids`、`attention_mask`、`marker_pos`、`marker_mask` 与 `qtype`，输出 `logits`
+（allow / review / block）；取最大值为结论，allow 领先不足 `allow_margin` 时改为 review。超过
+`max_tokens` 的调用不进入模型，直接以 `input_token_limit` 判为 block。
+
+**模型包**（`src/model/package.ts`）：一个目录，包含
+
+- `model.json`：`format`（当前为 1，其他值拒绝）、`id`、`size`、按偏好排序的图变体（文件、精度
+  `fp32` / `fp16-mixed`、验证过的设备 `cpu` / `gpu`），以及除 `model.json` 外每个文件的字节数与 SHA-256。
+- `runtime-config.json`：模型自带的推理参数（`max_tokens`、`micro_batch`、`allow_margin` 等）。
+- `assets/`：分词器与策略文件；ONNX 图及其外部权重。
+
+`model install` 校验每个文件的大小与 SHA-256，先复制到临时目录，全部通过后才换入；模型 id 只允许安全字符。
+下载与签名分发尚未实现。
+
+**0.2B v1 预览版来源**：训练运行 `permission-pairs199-v63` 的 `pair_zero` 对照组，`step-0004` 全精度权重
+（SHA-256 `f571e5cf01ff1348cfeb35b56549905bbbc83ea32bb6272f7afbb37eec031e0c`）。另一组 `pair` 与对照组的
+诊断结果完全相同，但正常调用被误拦截的回归更多（12 组对 7 组），因此采用对照组。导出沿用训练仓库的
+发布流水线：fp32 在 CPU 导出，fp16 在 CUDA 导出，再经注意力掩码展开、旋转位置缓存展开、注意力内存上限、
+窗口掩码压缩与权重转换折叠，生成两个变体：
+
+| 变体 | 精度 | 设备 | 权重大小 |
+| --- | --- | --- | --- |
+| `risk199-fp32-runtime.onnx` | fp32 | CPU | 约 760 MiB |
+| `risk199-attention-fp32.onnx` | fp16 权重，注意力 fp32 | GPU / CPU | 约 460 MiB |
+
+## 六、宿主适配
+
+每个宿主的能力不同，适配层负责把同一个判定结论映射为该宿主能执行的行为。**目前只适配 dsh**；Claude Code
+与 Codex 的调查结论保留在下表，两者需要每次调用启动的 hook 客户端，届时再加入。
+
+| 能力 | DeepSeek harness（dsh） | Claude Code | Codex |
 | --- | --- | --- | --- |
 | 接入点 | 服务端插件监听 `tools/pre-execute` waterfall（`prepend`），覆盖每个原生工具调用与 PTC 内层调用 | `PreToolUse`（allow / deny / ask）、`PermissionRequest` | `PreToolUse`（allow / deny，`ask` 不支持）、`PermissionRequest`（仅升权请求） |
 | 结论 | `allow` / `deny` / `ask` / `cancel` | allow / deny / ask | allow / deny |
-| 询问用户 | 支持：`ask` 经 `ctx.approval`，只有 `allowed-once` 放行 | 支持 | 不支持 |
-| 复核 LLM | 可经 `ctx.llm.stream` 直接使用当前 agent 的 provider 与模型 | 自有配置；可评估宿主 `prompt` hook | 必须自有配置与自定义复核标准，因为没有用户兜底 |
-| 控制界面与登录 | 宿主内：设置页分节、UI slot、`dsh-authorization` 登录 flow | 命令行 | 命令行 |
-| 进程模型 | 插件常驻宿主进程，在 effect 生命周期内管理 `serve`，无每次冷启动 | 每次调用启动 hook 客户端（后续阶段） | 每次调用启动 hook 客户端（后续阶段） |
-| 失败语义 | 插件抛错或返回 `deny` 均不执行；审批无应答为 `unavailable`，即拒绝 | `command`/`http` 必须设 `onFailure: "block"`；`mcp_tool` 失败时放行，不得用作闸门 | hook 超时语义待实测 |
+| 询问用户 | 支持：`ask` 经审批服务，只有“允许一次”放行；审批策略为 `never` 时按拒绝处理 | 支持 | 不支持 |
+| 复核 LLM | 经 `ctx.llm.stream` 使用当前会话的 provider 与模型 | 自有配置；可评估宿主 `prompt` hook | 必须自有配置与复核标准，因为没有用户兜底 |
+| 进程模型 | 插件常驻宿主进程，持有服务的 keepalive 连接 | 每次调用启动 hook 客户端（后续阶段） | 同左 |
+| 失败语义 | 插件抛错或返回 `deny` 均不执行 | `command`/`http` 必须设 `onFailure: "block"`；`mcp_tool` 失败时放行，不得用作闸门 | hook 超时语义待调查 |
 
-结论映射：
+### dsh 适配
 
-- **allow**：放行。
-- **block**：拒绝，并把理由返回给模型。
-- **review**：交复核 LLM；复核仍未放行时，支持询问的宿主询问用户，不支持的宿主直接拒绝。
-
-### dsh 适配要点
-
-依据 dsh `0.2.1-rc.2` 源码（`D:\dsh\deepseek-harness`）的插件文档与实现；dsh 升级后需回读源码核对。
+依据 dsh `0.2.1-rc.2` 源码（`D:\dsh\deepseek-harness`）；dsh 升级后需回读源码核对。
 
 - **形态**：Cordis 插件，以 npm 组合包分发（`package.json` 声明 `dsh.bundle.patch` 指向 `cordis.patch.yml`），
-  通过 `dsh plugin add` 安装到 profile，也可列入插件市场 JSON 索引。客户端界面以 `dsh.client` 声明的
-  client 模块加载。
-- **闸门**：参考 `packages/experimental/auto-review`：在 effect 中以 `prepend` 注册 `tools/pre-execute`
-  监听，判定 allow 时继续 `next()`，block 时返回 `deny`，review 时交复核 LLM，仍未放行则返回 `ask`。
-  外层 `run_code` 与 PTC 程序内直接的 Node 副作用不经过该 waterfall，与 Auto review 的限制相同。
-- **复核 LLM**：`ctx.llm.stream` 使用当前 agent 的 provider 与模型，复核请求不进入会话日志。
-- **登录**：向 `dsh-authorization` 注册 OpenVulcan 的 OAuth flow，令牌存入宿主凭据存储
-  （`dsh-credentials-local`），设置页发起登录与登出。
-- **配置**：`src/index.ts` 的 `Config` 有四个字段：`mode`（接入方式）、`backend`（`cloud`/`local`）、
-  `modelSize`（省略即按设备推荐）、`review`（`host-model`/`off`）。dsh 的设置表单只暴露 `.volatile()`
-  字段，因此全部声明为 volatile，在每次操作开始时 `.get()` 读取；保存后 Host 发出
-  `loader/volatile-update`，插件无需重启。`backend`、`modelSize`、`review` 目前只保存，尚无代码读取，
-  相应功能上线后生效。
-- **设置页**：插件自带页面，经 `settings.configure({ auto: false })` 关闭 dsh 按 Schema 自动生成的页面，
-  浏览器端注册到 `plugins.bundle.config`（以包名为键，显示在插件详情页描述与组件列表之间），
-  经 `configForms.get('vulcan-decision-guard')` 读写，用 `SettingsForm` 外壳提供保存与离开时丢弃。
-  页面依次为：状态、接入方式、判定后端、模型尺寸（仅本机模型时显示）、拿不准的调用、OpenVulcan 账号
-  （尚未开放，登录按钮停用）。
-- **状态区的来源**：第三方插件无法新增 Remote（dsh 的 Remote 在构建时由 Typert 生成），浏览器端拿不到
-  Host 端的实时状态（如判定服务是否在运行），因此状态只由浏览器可读的事实推出：
-  - 判定：当前版本没有判定后端，固定显示“受管控的调用一律拒绝”。
-  - Auto 预设：由已保存的 `mode`、`pluginManager.listBundles()`（Auto review 是否启用）与
-    `permissionPresets.catalog()`（是否存在 `auto`）推出，收到 `plugin-manager/changed`、
-    `permission-presets/catalog-changed` 或连接重置时重读。
-- **其他界面**：会话内的判定理由显示在工具卡片；其他入口经 `ctx.slots.inject` 贡献到已声明的 slot。
-- **与权限预设的关系**：dsh 的权限预设表只允许配置预设与一个固定的 `auto` 槽位；`auto` 同时只能
-  由一个集成注册（重复注册会抛错），官方实验插件 Auto review 使用它。`auto` 的组合固定为
-  `danger-full-access` 沙箱加 `ask` 审批，即选中 `auto` 的会话没有文件沙箱。
+  通过 `dsh plugin add` 安装到 profile。`engines.dsh` 为 `>=0.2.1-rc.2 <0.3.0`，dsh 包一律作为 peer 依赖。
+- **闸门**（`src/index.ts`）：以 `prepend` 注册 `tools/pre-execute` 监听。外层 `run_code` 与 PTC 程序内直接的
+  Node 副作用不经过该 waterfall，与 dsh 自带 Auto review 的限制相同。dsh 先执行该 waterfall、后校验工具参数，
+  因此参数不合法的调用也会被判定（与询问），随后才被 dsh 以参数错误拒绝。
+- **工具换算**（`src/calls.ts`）：
+
+  | dsh 工具 | 送给模型 |
+  | --- | --- |
+  | `bash` / `pwsh`（含持久会话变体） | `shell_command {command, cwd?, shell}`；`cwd` 只在给出 `workdir` 时出现，按项目根解析 |
+  | `terminal_send` | `shell_command {command: text}` |
+  | `write` / `edit` | `write_file` / `edit_file {path}`；项目内直接放行 |
+  | `str_replace_editor` | `view` → `read_file`，`create` → `create_file`，`str_replace` / `insert` → `edit_file` |
+  | `read` / `read_image` / `glob` / `grep` / `lsp` | `read_file {path}`；项目内直接放行 |
+  | 宿主内部工具（提问、目标、待办、会话检索、子代理通信等） | 不判定，直接放行 |
+  | 其他工具（MCP、`web_fetch`、计划任务等） | 原样送给模型 |
+
+  项目是会话的工作目录。项目根为文件系统根或用户主目录时，不视为“项目内”；路径以 `..` 开头或经过
+  `.git` 的目标也不视为项目内。编辑类调用只把路径交给模型，这与模型训练时的工具形状一致。
+- **复核 LLM**（`src/review.ts`）：使用会话请求头中的 provider 与模型，`temperature` 为 0，复核请求不进入会话
+  记录。输入分为 ENVIRONMENT（项目与授权选项）、USER_INSTRUCTIONS（最近 6 条用户与代理指令，每条最多
+  4000 字符）、RECENT_TOOL_CALLS（最近 12 次工具调用，参数最多 1500 字符）与 PENDING_CALL（判定阶段、
+  工具与参数）。只接受 `{"decision":"allow"}` 或 `{"decision":"deny","reason":"…"}`，其他输出、流未以
+  `stop` 结束或任何异常一律视为复核失败。
+- **询问**：`ask` 携带英文 `reason` 与按界面语言显示的 `displayReason`（中、英）；下游监听返回的非放行
+  结论优先。拒绝时附带 `info {name: 'VulcanDecisionDeniedError', code: 'VULCAN_DECISION_DENIED'}`。
+- **配置**（`Config`，全部 `.volatile()`，每次操作开始时读取，保存后无需重启）：`mode`（接入方式）、
+  `backend`（`local` / `cloud`，默认 `local`；`cloud` 尚未开放，选中时受管控的调用询问用户）、`modelSize`
+  （省略即按设备选择）、`review`（`host-model` / `off`，默认 `host-model`）、`crossProjectWrites`（默认
+  `allow`）、`databaseReset` 与 `projectReset`（默认 `confirm`）。
+- **设置页**（`client/index.tsx`）：插件自带页面，经 `settings.configure({ auto: false })` 关闭 dsh 自动生成的
+  表单，浏览器端注册到 `plugins.bundle.config`，经 `configForms.get('vulcan-decision-guard')` 读写。页面依次为：
+  状态、接入方式、判定后端（本机模型时显示模型尺寸与安装命令）、授权选项、模型未放行的调用、OpenVulcan
+  账号（尚未开放）。
+- **状态区的来源**：第三方插件无法新增 Remote（dsh 的 Remote 在构建时由 Typert 生成并静态组装），浏览器端
+  拿不到 Host 端的实时状态（服务是否运行、模型是否已安装），因此状态只由浏览器可读的事实推出：判定一行
+  由已保存的后端与尺寸推出，并给出 `status` 命令；Auto 预设一行由 `mode`、`pluginManager.listBundles()` 与
+  `permissionPresets.catalog()` 推出，收到 `plugin-manager/changed`、`permission-presets/catalog-changed`
+  或连接重置时重读。
+- **与权限预设的关系**：dsh 的权限预设表只有配置预设与一个固定的 `auto` 槽位；`auto` 同时只能由一个集成
+  注册，组合固定为 `danger-full-access` 沙箱加 `ask` 审批。`registerAuto(admit)` 不接受说明文字，选择 Auto
+  时的确认对话框文字由 dsh 固定，描述的是 dsh 自带 Auto review 的行为。
 - **接入方式（用户设置，二选一）**：
 
-  | 方式 | 启用位置 | 判定范围 | 沙箱 | 代价 |
-  | --- | --- | --- | --- | --- |
-  | 自动预设（`auto`） | dsh 原生权限选择器中选择 | 仅当前预设为 `auto` 的会话 | 无（Full access） | 实现简单 |
-  | 独立开关 | 本插件设置页 | 开关打开时所有会话，叠加在所选预设之上 | 保留所选预设的沙箱 | 需处理与各预设的组合 |
+  | 方式 | 启用位置 | 判定范围 | 沙箱 |
+  | --- | --- | --- | --- |
+  | 自动预设（`auto`） | dsh 权限选择器中选择“自动审查” | 仅当前预设为 `auto` 的会话 | 无（完全权限） |
+  | 独立开关 | 本插件设置页 | 所有会话，叠加在所选预设之上 | 保留所选预设的沙箱 |
 
-- **与 Auto review 的关系：替代，不共存。** 两者功能相同（逐调用审查后放行），本插件安装后 Auto review
-  没有存在意义，因此不实现让出、协调或双重审查逻辑，只做冲突检测与提示：
-  - 冲突的判定：dsh 的 Auto review 组合包（`@deepseek-ai/dsh-experimental-auto-review`）与本插件同时启用。
-    与谁占用 `auto` 无关：无论先后，总有一方不生效。
-  - 提示（插件的浏览器端，`client/index.tsx`）：经 `pluginManager.listBundles()` 读取 Auto review 是否启用，
-    收到 `plugin-manager/changed` 或连接重置时重读。冲突时在两个插件的详情页标题旁显示“冲突”标签
-    （`plugins.detail.badge`），并在页内显示说明与“停用自动授权审查”按钮（`plugins.detail.section`），
-    按钮调用 `pluginManager.setBundleEnabled(…, false)`。dsh 固定 Auto 选项的名称与说明，无法在权限选择器内标注。
+- **与 Auto review 的关系：替代，不共存。** 两者功能相同，只做冲突检测与提示：
+  - 冲突：dsh 的 Auto review 组合包（`@deepseek-ai/dsh-experimental-auto-review`）与本插件同时启用。
+  - 提示：浏览器端经 `pluginManager.listBundles()` 读取，冲突时在两个插件的详情页标题旁显示“冲突”标签，
+    并在页内提供“停用自动授权审查”按钮（`pluginManager.setBundleEnabled(…, false)`）。
   - 接管：Host 端在启动及每次 `permission-presets/catalog-changed` 时尝试注册 `auto`；被占用则跳过，
-    对方停用、槽位释放后自动接管，无需重启或重装。
-  - 插件加载绝不因冲突失败：`auto` 被占用时不注册；`registerAuto` 因竞态抛错时捕获，按“已占用”处理。
-    若本插件先注册，后加载的 Auto review 会在它自己的注册处报错（插件页显示“异常”），这是预期的冲突结果。
-- **自动预设方式的卸载与切换**：参照 Auto review：先停止接收，把仍处于 `auto` 的会话迁回配置预设
-  （`workspace-write`），再撤回注册。设置页把接入方式改为独立开关时同样撤回；改回自动预设时立即
-  重新注册（`auto` 未被占用时）。
+    对方停用后自动接管。`registerAuto` 因竞态抛错时按“已占用”处理，插件加载绝不因冲突失败。
+- **卸载与切换**：先停止接收，把仍处于 `auto` 的会话迁回 `workspace-write`，再撤回注册；设置页改为独立开关
+  时同样撤回，改回自动预设时立即重新注册。插件卸载时关闭 keepalive 连接，服务随后自行空闲退出。
 
-## 六、仓库结构
+## 七、仓库结构
 
 ```
-crates/
-  decision-core/        协议、帧格式、端点位置（所有组件共用）
-  decision-cli/         vulcan-decision 可执行文件：serve / ensure / endpoint / status / stop
-  decision-cloud/       （规划）OpenVulcan 账号与 OAuth、云端判定客户端
-  decision-local/       （规划）ONNX 推理、模型包校验、设备探测（仅完整版）
 packages/
-  dsh-decision-guard/   dsh 插件 @openvulcan/dsh-decision-guard：Host 端 src/、浏览器端 client/（构建为 lib/client.js）
-scripts/
-  stage-native.mjs      生成各平台 npm 包
+  vulcan-decision/      @openvulcan/vulcan-decision：服务、客户端、命令行、模型包与推理（src/model/）
+  dsh-decision-guard/   @openvulcan/dsh-decision-guard：Host 端 src/、浏览器端 client/
 docs/
 ```
 
-一个仓库同时容纳两类产物：
+- **宿主插件**（`packages/<宿主>-decision-guard`）只含宿主适配逻辑，依赖 `@openvulcan/vulcan-decision` 的
+  `/client` 入口，按宿主的插件机制安装。
+- **判定服务**（`@openvulcan/vulcan-decision`）为所有宿主共用；后续加入的宿主插件引用同一个包。
 
-- **宿主插件**（`packages/<宿主>-decision-guard`）：只含宿主适配逻辑，体积小，按宿主的插件机制安装。
-- **原生服务**（`vulcan-decision`）：所有宿主共用的常驻判定服务，以平台 npm 包分发，由宿主插件的
-  `optionalDependencies` 引入。后续加入的宿主插件引用同一组平台包，不重复打包。
+## 八、发布与安装
 
-## 七、发布与安装
+1. 先发布 `@openvulcan/vulcan-decision`，再发布 `@openvulcan/dsh-decision-guard`（插件以 `workspace:*`
+   引用前者，发布时由 pnpm 换成实际版本）。
+2. 用户执行 `dsh plugin add @openvulcan/dsh-decision-guard`。pnpm 11 默认拦下依赖的安装脚本，dsh 把
+   `onnxruntime-node` 记为待决定并提示“允许这些脚本并重试”。该脚本只在 Linux x64 上下载 CUDA 执行库，在
+   其他平台上直接退出；本项目不使用 CUDA，因此在 profile 的 `pnpm-workspace.yaml` 中写入
+   `allowBuilds: { onnxruntime-node: false }` 同样可以完成安装，Linux x64 上推荐这样做。
+3. 用户执行 `npx @openvulcan/vulcan-decision model install <目录> --size <尺寸>` 安装模型。
 
-平台包的集合只定义一次：dsh 插件 `package.json` 的 `optionalDependencies`
-（`@openvulcan/vulcan-decision-<os>-<cpu>`，os/cpu 采用 Node 的 `process.platform` / `process.arch`）。
-`scripts/stage-native.mjs` 只维护它们到 Rust target 的映射，两边不一致时拒绝执行。
+模型权重不进入 npm 包，也不使用 `postinstall` 下载。
 
-| 平台包 | Rust target |
-| --- | --- |
-| `win32-x64` | `x86_64-pc-windows-msvc` |
-| `linux-x64` | `x86_64-unknown-linux-gnu` |
-| `linux-arm64` | `aarch64-unknown-linux-gnu` |
-| `darwin-arm64` | `aarch64-apple-darwin` |
-| `darwin-x64` | `x86_64-apple-darwin` |
+## 九、验证记录
 
-发布顺序：
+在 Windows 11、dsh `0.2.1-rc.2`（npm `next`）、onnxruntime-node 1.30.0 上验证：
 
-1. 各平台执行 `cargo build --release --target <triple>`。
-2. `node scripts/stage-native.mjs` 在 `dist/npm/` 生成平台包：`bin/vulcan-decision[.exe]` 与带
-   `os`/`cpu`（Linux 另加 `libc: glibc`）的 `package.json`。脚本校验 Cargo 工作区版本、插件版本与
-   平台包依赖版本三者相同，任一缺少构建即失败。
-3. 先发布全部平台包，再发布 `@openvulcan/dsh-decision-guard`；否则用户安装插件时会解析不到平台包。
+- **数值一致性**：37 条调用（含 dsh 形状的调用）对照 PyTorch fp32 CPU 参考实现：CPU fp32 变体 37/37 结论
+  相同，logits 最大差 0.0001；DirectML 上的 fp16 变体 37/37 结论相同，最大差 0.16。分词与 Python 参考
+  21/21 完全相同。
+- **延迟**（CPU，经常驻服务，0.2B fp32）：首次判定约 0.8 秒（含拉起服务与加载模型），之后中位数约 107 ms。
+- **dsh 端到端**：在隔离的 `DSH_HOME` 中用 `dsh plugin add` 安装打包后的插件，用本地脚本化的 Messages 模拟
+  服务代替付费模型，在 Auto 预设下逐一确认：`git status` 放行并执行；`Remove-Item -Recurse -Force .` 被
+  拦截，复核未放行后拒绝，理由返回给模型；`git push --force` 需确认，复核未放行后显示询问卡片（中文理由），
+  “允许一次”与“拒绝”都按预期生效；`git reset --hard HEAD~3` 需确认，复核放行后直接执行；项目外写入经
+  模型放行；项目内写入不经模型直接放行。插件加载时拉起服务，`status` 显示的判定次数与调用次数一致。
+- **此前已验证**：`dsh plugin add` 安装与加载、权限选择器出现 Auto；两种加载顺序下的冲突提示、停用
+  Auto review 后自动接管；设置页显示（含深色模式）与保存写入 profile 的 `cordis.patch.yml`；接入方式切换后
+  Auto 的出现与消失；模型尺寸的设定与清除。
+- **尚未验证**：复核 LLM 对真实模型的调用（只用模拟服务与单元测试验证）；Linux 与 macOS；GPU 执行设备在
+  CUDA 上的表现。
 
-安装：
+已知的模型行为（0.2B 预览版，按当前训练数据）：`iwr … | iex` 这类下载后直接执行的命令被判为 allow；
+未在训练中出现的工具（如 `web_fetch`、计划任务、MCP 工具）多判为 allow。
 
-```
-dsh plugin add @openvulcan/dsh-decision-guard
-```
+## 十、待决定与待调查
 
-`dsh plugin add` 在 profile 内通过 pnpm 安装，pnpm 依据 `os`/`cpu` 只下载当前机器的平台包；插件也可
-列入 dsh 插件市场的 JSON 索引。插件声明 `engines.dsh`（当前 `>=0.2.1-rc.2 <0.3.0`），dsh 包一律作为
-peer 依赖。插件加载时按 `@openvulcan/vulcan-decision-<platform>-<arch>/package.json` 解析执行文件，
-没有当前平台的构建时不阻止插件加载，而是让每次判定失败即拒绝。开发时可用环境变量
-`VULCAN_DECISION_BIN` 指向本地构建。
-
-不使用 `postinstall` 下载；模型权重与 CUDA 执行库不进入 npm 包。
-
-## 八、待决定与待调查
-
-1. 云端精简版与完整版是两个 npm 包，还是同一个包按需下载本机运行时。
-2. OpenVulcan OAuth 的登录方式：设备码流程，还是本机回环重定向。
-3. 复核 LLM 的默认提供方与配置位置。
-4. dsh 接入方式的默认值：骨架暂定自动预设，尚未最终决定。
-5. Windows named pipe 目前使用默认 ACL，需要收紧为仅当前用户。
-6. 已在 dsh 0.2.1-rc.2（npm `next`）中验证：`dsh plugin add` 安装打包后的插件、插件加载并拉起服务、
-   权限选择器出现 Auto；两种加载顺序下的冲突提示、“停用自动授权审查”按钮及停用后自动接管 Auto；
-   设置页的显示（含深色模式）与保存，保存写入 profile 的 `cordis.patch.yml`；切换为独立开关后 Auto
-   从权限选择器消失，切回自动预设后立即恢复；模型尺寸的设定与清除（恢复按设备推荐）。
-   尚未验证实际工具调用的拦截（需要模型调用）。
-7. （后续阶段）Codex hook 超时与崩溃时的行为，以及 Codex 桌面版与 IDE 扩展是否执行 hook。
+1. 模型的下载与签名分发：来源、校验与版本更新方式。
+2. OpenVulcan 云端判定与 OAuth 登录方式（设备码流程，还是本机回环重定向）。
+3. dsh 接入方式的默认值：目前为自动预设。
+4. Windows named pipe 目前使用默认 ACL，需要收紧为仅当前用户。
+5. dsh 若开放第三方插件的 Remote，设置页改为显示服务与模型的实时状态。
+6. （后续阶段）Codex hook 超时与崩溃时的行为，以及 Codex 桌面版与 IDE 扩展是否执行 hook。
