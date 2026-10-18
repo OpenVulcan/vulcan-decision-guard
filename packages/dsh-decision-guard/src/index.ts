@@ -6,7 +6,7 @@ import { RUN_CODE_NAME, type PreToolDecision, type ToolExecution } from '@deepse
 import type {} from '@deepseek-ai/dsh-working-directory'
 
 import { binaryPath } from './binary.js'
-import { DecisionClient, type Verdict } from './client.js'
+import { DecisionClient, type Verdict } from './decision-client.js'
 
 export const name = 'vulcan-decision-guard'
 export const inject = ['permissionPresets', 'sessions', 'tools', 'workingDirectory']
@@ -72,25 +72,39 @@ export function apply(ctx: Context, config: Config): void {
     }
   }
 
-  /** Register `auto` unless another integration (usually Auto review) already holds it. */
-  const claimAuto = (): (() => Promise<void>) | undefined => {
+  let stopAuto: (() => Promise<void>) | undefined
+  let claiming = false
+  let reportedHeld = false
+
+  /**
+   * Register `auto` unless another integration (usually Auto review) already holds it. Called at
+   * start and whenever the catalog changes, so the slot is taken once the other integration leaves.
+   */
+  const claimAuto = (): void => {
+    if (config.mode !== 'auto-preset' || !accepting || stopAuto !== undefined || claiming) return
     if (permissionPresets.catalog().options.some(option => option.value === AUTO_PRESET)) {
-      ctx.logger.warn('the Auto permission preset is held by another integration, usually Auto review; remove it to use Vulcan Decision as the Auto preset')
-      return undefined
+      if (!reportedHeld) {
+        reportedHeld = true
+        ctx.logger.warn('the Auto permission preset is held by another integration, usually Auto review; Vulcan Decision takes it once that integration is disabled')
+      }
+      return
     }
+    claiming = true
     try {
       const stop = permissionPresets.registerAuto(() => {
         if (!accepting) throw new Error('vulcan-decision-guard: integration is closing')
       })
       ownsAuto = true
-      return async () => {
+      reportedHeld = false
+      stopAuto = async () => {
         ownsAuto = false
         await stop()
       }
     } catch (error) {
       // A concurrent registration won the slot; the plugin keeps loading.
       ctx.logger.warn(`cannot register the Auto permission preset: ${error instanceof Error ? error.message : String(error)}`)
-      return undefined
+    } finally {
+      claiming = false
     }
   }
 
@@ -123,10 +137,13 @@ export function apply(ctx: Context, config: Config): void {
     }, { prepend: true })
     yield stopListener
 
-    if (config.mode === 'auto-preset') {
-      const stopAuto = claimAuto()
-      if (stopAuto !== undefined) yield stopAuto
+    yield async () => {
+      const stop = stopAuto
+      stopAuto = undefined
+      await stop?.()
     }
+    yield ctx.on('permission-presets/catalog-changed', claimAuto)
+    claimAuto()
 
     // Start the service now so the first tool call does not wait for it.
     client.start().catch((error: unknown) => {

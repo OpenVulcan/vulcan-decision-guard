@@ -116,12 +116,16 @@ Claude Code 与 Codex 的调查结论保留在下表供后续阶段参考，两�
 
 - **与 Auto review 的关系：替代，不共存。** 两者功能相同（逐调用审查后放行），本插件安装后 Auto review
   没有存在意义，因此不实现让出、协调或双重审查逻辑，只做冲突检测与提示：
-  - 检测：`ctx.permissionPresets.catalog().options` 含 `auto` 且不是本插件注册的，即表示另有集成（通常是
-    Auto review）占用该槽位；订阅 `permission-presets/catalog-changed` 后重新读取目录，跟踪安装与卸载。
-  - 提示：检测到冲突时，设置页与插件页说明两者功能重复，引导用户移除 Auto review。
-  - 插件加载绝不因冲突失败：自动预设方式在 `auto` 被占用时不注册，并在提示中说明需先移除对方；
-    `registerAuto` 因竞态抛错时捕获，按“已占用”处理。若本插件先注册，后加载的 Auto review 会在它自己的
-    注册处报错，这是预期的冲突结果。
+  - 冲突的判定：dsh 的 Auto review 组合包（`@deepseek-ai/dsh-experimental-auto-review`）与本插件同时启用。
+    与谁占用 `auto` 无关：无论先后，总有一方不生效。
+  - 提示（插件的浏览器端，`client/index.tsx`）：经 `pluginManager.listBundles()` 读取 Auto review 是否启用，
+    收到 `plugin-manager/changed` 或连接重置时重读。冲突时在两个插件的详情页标题旁显示“冲突”标签
+    （`plugins.detail.badge`），并在页内显示说明与“停用自动授权审查”按钮（`plugins.detail.section`），
+    按钮调用 `pluginManager.setBundleEnabled(…, false)`。dsh 固定 Auto 选项的名称与说明，无法在权限选择器内标注。
+  - 接管：Host 端在启动及每次 `permission-presets/catalog-changed` 时尝试注册 `auto`；被占用则跳过，
+    对方停用、槽位释放后自动接管，无需重启或重装。
+  - 插件加载绝不因冲突失败：`auto` 被占用时不注册；`registerAuto` 因竞态抛错时捕获，按“已占用”处理。
+    若本插件先注册，后加载的 Auto review 会在它自己的注册处报错（插件页显示“异常”），这是预期的冲突结果。
 - **自动预设方式的卸载与切换**：参照 Auto review：先停止接收，把仍处于 `auto` 的会话迁回配置预设，
   再撤回注册。
 
@@ -134,7 +138,7 @@ crates/
   decision-cloud/       （规划）OpenVulcan 账号与 OAuth、云端判定客户端
   decision-local/       （规划）ONNX 推理、模型包校验、设备探测（仅完整版）
 packages/
-  dsh-decision-guard/   dsh 插件 @openvulcan/dsh-decision-guard（Cordis 插件 + cordis.patch.yml）
+  dsh-decision-guard/   dsh 插件 @openvulcan/dsh-decision-guard：Host 端 src/、浏览器端 client/（构建为 lib/client.js）
 scripts/
   stage-native.mjs      生成各平台 npm 包
 docs/
@@ -189,8 +193,7 @@ peer 依赖。插件加载时按 `@openvulcan/vulcan-decision-<platform>-<arch>/
 3. 复核 LLM 的默认提供方与配置位置。
 4. dsh 接入方式的默认值：骨架暂定自动预设，尚未最终决定。
 5. Windows named pipe 目前使用默认 ACL，需要收紧为仅当前用户。
-6. 冲突提示目前只写入 `ctx.logger`，`dsh web` 不会把它显示给用户，需要设置页或插件页的提示界面。
-   已在 dsh 0.2.1-rc.2（npm `next`）中验证：`dsh plugin add` 安装打包后的插件、插件加载并拉起服务、
-   权限选择器出现 Auto；Auto review 先加载时本插件仍为“运行中”。尚未验证实际工具调用的拦截
-   （需要模型调用）。
+6. 已在 dsh 0.2.1-rc.2（npm `next`）中验证：`dsh plugin add` 安装打包后的插件、插件加载并拉起服务、
+   权限选择器出现 Auto；两种加载顺序下的冲突提示、“停用自动授权审查”按钮及停用后自动接管 Auto。
+   尚未验证实际工具调用的拦截（需要模型调用）。
 7. （后续阶段）Codex hook 超时与崩溃时的行为，以及 Codex 桌面版与 IDE 扩展是否执行 hook。
