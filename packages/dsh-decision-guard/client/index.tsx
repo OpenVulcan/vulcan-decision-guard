@@ -60,7 +60,9 @@ const zh = {
   'tone.off': '未使用',
 
   'install.title': '安装本机模型',
-  'install.body': '模型目前从本地目录安装，下载功能尚未开放。在终端执行下列命令安装或查看状态：',
+  'install.body': '在终端查看本机显卡、可用的运行设备（CUDA、DirectML 或 CPU）与推荐的模型尺寸和格式：',
+  'install.download': '下载并安装推荐的模型（下载地址发布后可用）：',
+  'install.local': '或从本地目录安装：',
   'install.status': '查看服务与已安装模型：',
   'mode.title': '接入方式',
   'mode.auto-preset': '自动预设',
@@ -181,7 +183,9 @@ const en: Record<Key, string> = {
   'tone.off': 'Not used',
 
   'install.title': 'Install the local model',
-  'install.body': 'Models are installed from a local directory for now; downloads are not available yet. Run this in a terminal to install one:',
+  'install.body': 'Check the graphics cards of this machine, the usable devices (CUDA, DirectML or CPU) and the recommended model size and format in a terminal:',
+  'install.download': 'Download and install the recommended model (once its address is published):',
+  'install.local': 'Or install one from a local directory:',
   'install.status': 'Check the service and installed models:',
   'mode.title': 'How the guard is turned on',
   'mode.auto-preset': 'Auto preset',
@@ -339,7 +343,9 @@ function guardApprovalOf(interaction: unknown): GuardApproval | null {
   }
 }
 
-/** Terminal commands shown for installing a model and checking the service. */
+/** Terminal commands shown for choosing, installing a model and checking the service. */
+const HARDWARE_COMMAND = 'npx @openvulcan/vulcan-decision hardware'
+const DOWNLOAD_COMMAND = 'npx @openvulcan/vulcan-decision model download'
 const INSTALL_COMMAND = 'npx @openvulcan/vulcan-decision model install <model directory> --size 0.2b'
 const STATUS_COMMAND = 'npx @openvulcan/vulcan-decision status'
 
@@ -866,6 +872,10 @@ export function apply(ctx: ClientContext): void {
                   <div style={{ ...styles.notice, display: 'flex', flexDirection: 'column', gap: 6 }}>
                     <strong style={{ fontWeight: 500 }}>{t('install.title')}</strong>
                     <span>{t('install.body')}</span>
+                    <code style={styles.command}>{HARDWARE_COMMAND}</code>
+                    <span>{t('install.download')}</span>
+                    <code style={styles.command}>{DOWNLOAD_COMMAND}</code>
+                    <span>{t('install.local')}</span>
                     <code style={styles.command}>{INSTALL_COMMAND}</code>
                     <span>{t('install.status')}</span>
                     <code style={styles.command}>{STATUS_COMMAND}</code>

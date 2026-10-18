@@ -1,8 +1,9 @@
 /** Keeps the models the service has loaded, loading on first use and unloading when idle. */
 
 import { DecisionError, type ModelSize, type ModelStatus, type Verdict } from './protocol.js'
+import { detectHardware, recommendedSizeFor } from './model/hardware.js'
 import { listInstalled, selectModel } from './model/package.js'
-import { LoadedModel, type ModelInput } from './model/runtime.js'
+import { LoadedModel, requestedProvider, type ModelInput } from './model/runtime.js'
 
 /** A model nobody has used for this long is unloaded to return its memory. */
 const UNLOAD_AFTER_MS = 15 * 60 * 1000
@@ -28,7 +29,9 @@ export class ModelHost {
    * @throws DecisionError when no model can answer.
    */
   async judge(size: ModelSize | undefined, input: ModelInput): Promise<Verdict> {
-    const model = selectModel(size)
+    const model = size === undefined
+      ? selectModel(undefined, listInstalled(), recommendedSizeFor(detectHardware(), requestedProvider()))
+      : selectModel(size)
     const id = model.manifest.id
     let slot = this.#slots.get(id)
     if (slot === undefined) {

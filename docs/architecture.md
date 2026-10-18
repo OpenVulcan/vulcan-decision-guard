@@ -72,7 +72,13 @@ Python，也不需要单独下载 ONNX Runtime。
 - **生命周期**：宿主插件运行期间保持一条 keepalive 连接；服务在没有连接且空闲 30 分钟后退出，模型空闲
   15 分钟后卸载。传输失败时客户端重试一次（必要时重新拉起服务）。
 - **推理**：同一模型的推理串行执行以限制内存；一次请求中的多个调用按模型的 `micro_batch` 分批。
-  执行设备默认 CPU，环境变量 `VULCAN_DECISION_DEVICE=dml|cuda` 可试用 GPU（实验性）。
+  执行设备默认自动选择（`src/model/hardware.ts`）：按 CUDA → DirectML → CPU 取第一个可用的。CUDA 只在
+  Linux x64 上可用，需要 `nvidia-smi` 报告显卡、`onnxruntime-node` 的安装脚本已下载
+  `libonnxruntime_providers_cuda.so`，且系统加载器能找到 CUDA 12 与 cuDNN 9 的六个库；DirectML 只在 Windows
+  上可用，需要绑定目录中的 `DirectML.dll` 与一块真实显卡（排除基本显示适配器与远程、虚拟显示器）。
+  `VULCAN_DECISION_DEVICE=auto|cpu|dml|cuda` 可指定设备；指定的设备加载失败时直接报错，不改用其他设备。
+  图变体在设备类别验证过的变体中优先取推荐格式：GPU 为 `fp16-mixed`，CPU 与计算能力低于 5.3 的 CUDA 显卡为
+  `fp32`。
 
 命令行（`npx @openvulcan/vulcan-decision …`）：
 
@@ -80,14 +86,17 @@ Python，也不需要单独下载 ONNX Runtime。
 | --- | --- |
 | `serve` | 常驻判定服务 |
 | `start` / `stop` / `status` | 启动、停止、查看服务与已安装模型（`status` 不会启动服务） |
-| `model list` / `model install <目录> --size <尺寸> [--id <id>]` / `model remove <id 或尺寸>` | 模型包管理；安装与删除前先停止服务 |
+| `hardware` | 显卡、各执行设备是否可用（缺少的驱动或库）、当前设备与推荐的尺寸和格式 |
+| `model download [--size <尺寸>] [--precision <格式>]` | 下载已发布的模型；省略时取推荐值，按已发布的尺寸与格式落定 |
+| `model list` / `model install <目录> --size <尺寸> [--id <id>]` / `model remove <id 或尺寸>` | 模型包管理；安装、下载后换入与删除前先停止服务 |
 | `judge --input <文件>` | 经服务判定（调试） |
 | `eval --input <文件> [--size <尺寸>]` | 在当前进程内对已渲染的输入打分（调试与对照） |
 
 ## 五、模型与模型包
 
 模型：`vulcan-decision-shell-{0.2b|0.4b|0.6b}-v1-preview`，当前只有 0.2B。尺寸是用户设置；省略时选择
-已安装的、本机内存适合的最大尺寸（总内存 < 12 GiB 为 0.2B，< 24 GiB 为 0.4B，其余 0.6B）。
+已安装的、本机适合的最大尺寸：按总内存（< 12 GiB 为 0.2B，< 24 GiB 为 0.4B，其余 0.6B），在 GPU 上再按
+最小的显存（< 4 GiB 为 0.2B，< 8 GiB 为 0.4B，其余 0.6B），取两者中较小的一档。
 
 **输入格式**（`src/render.ts`，与训练格式一致，不额外补充任务描述、历史消息或文件状态）：
 
@@ -110,7 +119,12 @@ Arguments: <实际参数的紧凑 JSON，键保持原顺序>
 - `assets/`：分词器与策略文件；ONNX 图及其外部权重。
 
 `model install` 校验每个文件的大小与 SHA-256，先复制到临时目录，全部通过后才换入；模型 id 只允许安全字符。
-下载与签名分发尚未实现。
+
+**下载**（`src/model/download.ts`）：每个已发布的模型是一个尺寸的一种格式，以交付包目录发布（`MANIFEST.json`
+列出每个文件的字节数与 SHA-256）。包内的发布目录固定该目录的地址、`MANIFEST.json` 的 SHA-256 与文件总大小；
+清单摘要或总大小不符即停止。文件下载到以清单摘要命名的工作目录，经 `.part` 文件写完再改名，逐个校验；
+中断后已校验的文件不再下载。全部通过后才停止服务，再经 `model install` 的同一流程换入。0.2B 预览版的两种格式
+都已登记，下载地址尚未发布（为空），此时 `model download` 报错并指向 `model install`。
 
 **0.2B v1 预览版来源**：训练运行 `permission-pairs199-v63` 的 `pair_zero` 对照组，`step-0004` 全精度权重
 （SHA-256 `f571e5cf01ff1348cfeb35b56549905bbbc83ea32bb6272f7afbb37eec031e0c`）。另一组 `pair` 与对照组的
@@ -234,9 +248,10 @@ docs/
    引用前者，发布时由 pnpm 换成实际版本）。
 2. 用户执行 `dsh plugin add @openvulcan/dsh-decision-guard`。pnpm 11 默认拦下依赖的安装脚本，dsh 把
    `onnxruntime-node` 记为待决定并提示“允许这些脚本并重试”。该脚本只在 Linux x64 上下载 CUDA 执行库，在
-   其他平台上直接退出；本项目不使用 CUDA，因此在 profile 的 `pnpm-workspace.yaml` 中写入
-   `allowBuilds: { onnxruntime-node: false }` 同样可以完成安装，Linux x64 上推荐这样做。
-3. 用户执行 `npx @openvulcan/vulcan-decision model install <目录> --size <尺寸>` 安装模型。
+   其他平台上直接退出。Linux x64 上要用 CUDA 时必须允许它；不用 CUDA 时在 profile 的
+   `pnpm-workspace.yaml` 中写入 `allowBuilds: { onnxruntime-node: false }` 同样可以完成安装。
+3. 用户执行 `npx @openvulcan/vulcan-decision hardware` 查看推荐，再用 `model download` 下载（地址发布后），
+   或用 `model install <目录> --size <尺寸>` 从本地目录安装。设置页显示同样的命令。
 
 模型权重不进入 npm 包，也不使用 `postinstall` 下载。
 
@@ -262,15 +277,19 @@ docs/
 - **此前已验证**：`dsh plugin add` 安装与加载、权限选择器出现 Auto；两种加载顺序下的冲突提示、停用
   Auto review 后自动接管；设置页显示（含深色模式）与保存写入 profile 的 `cordis.patch.yml`；接入方式切换后
   Auto 的出现与消失；模型尺寸的设定与清除。
-- **尚未验证**：复核 LLM 对真实模型的调用（只用模拟服务与单元测试验证）；Linux 与 macOS；GPU 执行设备在
-  CUDA 上的表现。
+- **设备推荐与下载**：`hardware` 在本机（RTX 5080，Windows）报告 DirectML 可用、CUDA 因平台不可用，推荐
+  0.6B `fp16-mixed`，下载落定为已发布的 0.2B `fp16-mixed` 并因地址未发布而报错；`eval` 自动选择 DirectML
+  并加载 fp16 图，结论与 CPU fp32 相同；指定 `VULCAN_DECISION_DEVICE=cuda` 时在加载前报错并说明原因。设备判定、格式与尺寸推荐、
+  下载校验与续传由单元测试覆盖（下载使用本地回环服务）。
+- **尚未验证**：复核 LLM 对真实模型的调用（只用模拟服务与单元测试验证）；Linux 与 macOS；CUDA 执行设备的
+  实际运行与数值一致性；真实下载地址。
 
 已知的模型行为（0.2B 预览版，按当前训练数据）：`iwr … | iex` 这类下载后直接执行的命令被判为 allow；
 未在训练中出现的工具（如 `web_fetch`、计划任务、MCP 工具）多判为 allow。
 
 ## 十、待决定与待调查
 
-1. 模型的下载与签名分发：来源、校验与版本更新方式。
+1. 模型下载地址与签名：下载与清单校验已实现，地址、发布签名与版本更新方式待定。
 2. OpenVulcan 云端判定与 OAuth 登录方式（设备码流程，还是本机回环重定向）。
 3. dsh 接入方式的默认值：目前为自动预设。
 4. Windows named pipe 目前使用默认 ACL，需要收紧为仅当前用户。

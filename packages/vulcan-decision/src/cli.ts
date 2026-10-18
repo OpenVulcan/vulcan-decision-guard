@@ -6,8 +6,10 @@ import fs from 'node:fs'
 import { parseArgs } from 'node:util'
 
 import { DecisionClient, exchange, ping } from './client.js'
-import { listInstalled, installFromDirectory, recommendedSize, removeInstalled, selectModel } from './model/package.js'
-import { LoadedModel, type ModelInput } from './model/runtime.js'
+import { chooseDownload, downloadModel } from './model/download.js'
+import { detectHardware, recommendedPrecision, recommendedProvider, recommendedSizeFor, type ProviderState } from './model/hardware.js'
+import { listInstalled, installFromDirectory, removeInstalled, selectModel, type Precision } from './model/package.js'
+import { DEVICE_ENV, LoadedModel, requestedProvider, type ModelInput } from './model/runtime.js'
 import { messageOf } from './models.js'
 import { dataDir, endpointPath } from './paths.js'
 import { CONTRACT_VERSION, DecisionError, MODEL_SIZES, type DecisionOptions, type JudgeCall, type ModelSize } from './protocol.js'
@@ -21,7 +23,10 @@ Usage:
   vulcan-decision start                       Start the service unless it is running
   vulcan-decision status                      Show the running service and installed models
   vulcan-decision stop                        Stop the running service
+  vulcan-decision hardware                    Show graphics cards, usable devices and the recommended model
   vulcan-decision model list                  List installed models
+  vulcan-decision model download [--size <size>] [--precision <fp16-mixed|fp32>]
+                                              Download a published model; defaults to the recommendation
   vulcan-decision model install <dir> --size <0.2b|0.4b|0.6b> [--id <id>]
                                               Install a model package from a local directory
   vulcan-decision model remove <id|size>      Remove an installed model
@@ -29,7 +34,8 @@ Usage:
   vulcan-decision eval --input <file> [--size <size>]
                                               Score rendered calls in this process (debugging)
 
-The data directory is ${dataDir()}; set VULCAN_DECISION_HOME to use another one.`
+The data directory is ${dataDir()}; set VULCAN_DECISION_HOME to use another one.
+${DEVICE_ENV}=auto|cpu|dml|cuda chooses the device; auto takes the recommended one.`
 
 /** Default authorization options, matching the model's policy defaults. */
 const DEFAULT_OPTIONS: DecisionOptions = { cross_project_writes: 'allow', database_reset: 'confirm', project_reset: 'confirm' }
@@ -47,6 +53,8 @@ export async function main(args: readonly string[]): Promise<number> {
         return await runStatus()
       case 'stop':
         return await runStop()
+      case 'hardware':
+        return runHardware()
       case 'model':
         return await runModel(rest)
       case 'judge':
@@ -139,6 +147,26 @@ async function runModel(args: readonly string[]): Promise<number> {
     case 'list':
       printInstalled()
       return 0
+    case 'download': {
+      const { values } = parseArgs({ args: [...rest], options: { size: { type: 'string' }, precision: { type: 'string' } } })
+      const provider = requestedProvider()
+      const hardware = detectHardware()
+      const size = parseSize(values.size) ?? recommendedSizeFor(hardware, provider)
+      const precision = parsePrecision(values.precision) ?? recommendedPrecision(provider, hardware)
+      // An explicit choice is downloaded as asked; the recommendation settles for what is published.
+      const chosen = values.size !== undefined && values.precision !== undefined ? { size, precision } : chooseDownload(size, precision)
+      if (chosen === undefined) throw new Error(`no published model fits ${size}`)
+      console.log(`downloading the ${chosen.size} ${chosen.precision} model for ${provider}`)
+      const model = await downloadModel({
+        size: chosen.size,
+        precision: chosen.precision,
+        log: line => console.log(line),
+        // A running service holds the graphs open; it restarts on the next call.
+        beforeInstall: async () => { if (await stopService()) console.log('stopped the running service') },
+      })
+      console.log(`installed ${model.manifest.id} at ${model.root}`)
+      return 0
+    }
     case 'install': {
       const { values, positionals } = parseArgs({
         args: [...rest],
@@ -167,7 +195,7 @@ async function runModel(args: readonly string[]): Promise<number> {
       return 0
     }
     default:
-      throw new Error('model needs list, install or remove')
+      throw new Error('model needs list, download, install or remove')
   }
 }
 
@@ -177,11 +205,60 @@ function printInstalled(): void {
     console.log('models: none installed')
     return
   }
-  console.log(`models (this device suits up to ${recommendedSize()}):`)
+  console.log(`models (this device suits up to ${recommendedSizeFor(detectHardware(), requestedProvider())}):`)
   for (const model of installed) {
     const graphs = model.manifest.variants.map(variant => `${variant.precision} on ${variant.devices.join('/')}`).join(', ')
     console.log(`  ${model.manifest.size}  ${model.manifest.id}  [${graphs}]`)
   }
+}
+
+function runHardware(): number {
+  const hardware = detectHardware()
+  console.log(`platform: ${hardware.platform} ${hardware.arch}, memory ${gib(hardware.totalMemory)}`)
+  if (hardware.gpus.length === 0) console.log('graphics cards: none found')
+  for (const gpu of hardware.gpus) {
+    const details = [
+      gpu.memoryBytes === undefined ? undefined : gib(gpu.memoryBytes),
+      gpu.computeCapability === undefined ? undefined : `compute ${gpu.computeCapability}`,
+      gpu.driver === undefined ? undefined : `driver ${gpu.driver}`,
+    ].filter(Boolean)
+    console.log(`graphics card: ${gpu.name}${details.length === 0 ? '' : ` (${details.join(', ')})`}`)
+  }
+  for (const state of hardware.providers) console.log(`  ${state.provider.padEnd(4)} ${describeProvider(state)}`)
+  const provider = requestedProvider()
+  const auto = recommendedProvider(hardware)
+  console.log(`device: ${provider}${provider === auto ? '' : ` (set by ${DEVICE_ENV}; recommended ${auto})`}`)
+  const size = recommendedSizeFor(hardware, provider)
+  const precision = recommendedPrecision(provider, hardware)
+  console.log(`recommended model: ${size} ${precision}`)
+  const published = chooseDownload(size, precision)
+  console.log(published === undefined
+    ? 'download: no published model fits'
+    : `download: ${published.size} ${published.precision}${published.download === null ? ' (address not published yet; use "model install")' : ' with "model download"'}`)
+  return 0
+}
+
+/** Readiness of one device and, when it cannot run, what to do about it. */
+function describeProvider(state: ProviderState): string {
+  if (state.unavailable === undefined) return 'ready'
+  switch (state.unavailable) {
+    case 'unsupported_platform':
+      return state.provider === 'cuda'
+        ? 'unavailable: onnxruntime-node ships CUDA for Linux x64 only'
+        : 'unavailable: onnxruntime-node ships DirectML for Windows only'
+    case 'no_gpu':
+      return 'unavailable: no graphics card found'
+    case 'nvidia_driver':
+      return 'unavailable: nvidia-smi did not answer; install the NVIDIA driver'
+    case 'cuda_provider':
+      return 'unavailable: the onnxruntime-node CUDA provider is missing; allow its install script (pnpm approve-builds, or npm without --ignore-scripts) and reinstall'
+    case 'cuda_libraries':
+      return `unavailable: install CUDA 12 and cuDNN 9; missing ${state.missing?.join(', ') ?? ''}`
+  }
+}
+
+function gib(bytes: number): string {
+  return `${(bytes / 1024 ** 3).toFixed(1)} GiB`
 }
 
 /** Input of `judge`: one call or a list, each optionally carrying options and a size. */
@@ -245,6 +322,12 @@ function parseSize(value: string | undefined): ModelSize | undefined {
   if (value === undefined) return undefined
   if (!(MODEL_SIZES as readonly string[]).includes(value)) throw new Error(`size must be one of ${MODEL_SIZES.join(', ')}`)
   return value as ModelSize
+}
+
+function parsePrecision(value: string | undefined): Precision | undefined {
+  if (value === undefined) return undefined
+  if (value !== 'fp16-mixed' && value !== 'fp32') throw new Error('precision must be fp16-mixed or fp32')
+  return value
 }
 
 function asList<T>(value: T | T[]): T[] {

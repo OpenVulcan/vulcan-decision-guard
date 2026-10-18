@@ -11,6 +11,7 @@ import path from 'node:path'
 
 import { DecisionError, MODEL_SIZES, type ModelSize } from '../protocol.js'
 import { modelsDir } from '../paths.js'
+import { sizeForMemory } from './hardware.js'
 
 /** Format of `model.json`; a package with another value is refused. */
 export const MODEL_FORMAT = 1
@@ -86,10 +87,11 @@ export function listInstalled(): InstalledModel[] {
 }
 
 /**
- * Pick the installed model for a requested size, or the device recommendation when absent.
+ * Pick the installed model for a requested size, or the largest one within `limit`, the size this
+ * device suits, when absent.
  * @throws DecisionError `model_not_installed` when nothing suitable is installed.
  */
-export function selectModel(size: ModelSize | undefined, installed = listInstalled()): InstalledModel {
+export function selectModel(size: ModelSize | undefined, installed = listInstalled(), limit = recommendedSize()): InstalledModel {
   if (size !== undefined) {
     const exact = installed.find(model => model.manifest.size === size)
     if (exact) return exact
@@ -98,18 +100,14 @@ export function selectModel(size: ModelSize | undefined, installed = listInstall
   if (installed.length === 0) {
     throw new DecisionError('model_not_installed', 'no decision model is installed; install one with "npx @openvulcan/vulcan-decision model install <dir> --size <size>"')
   }
-  const limit = MODEL_SIZES.indexOf(recommendedSize())
-  const fitting = installed.filter(model => MODEL_SIZES.indexOf(model.manifest.size) <= limit)
+  const fitting = installed.filter(model => MODEL_SIZES.indexOf(model.manifest.size) <= MODEL_SIZES.indexOf(limit))
   // Installed is sorted by size, so the last fitting model is the largest one this device suits.
   return fitting.at(-1) ?? installed[0]!
 }
 
-/** The largest size this device is expected to run comfortably, from its total memory. */
+/** The largest size this device is expected to run comfortably on the CPU, from its total memory. */
 export function recommendedSize(totalMemory = os.totalmem()): ModelSize {
-  const gib = totalMemory / 1024 ** 3
-  if (gib < 12) return '0.2b'
-  if (gib < 24) return '0.4b'
-  return '0.6b'
+  return sizeForMemory(totalMemory, 'ram')
 }
 
 export function readManifest(root: string): ModelManifest {

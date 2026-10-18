@@ -7,6 +7,8 @@ DeepSeek harness（dsh）的 Vulcan Decision 权限守卫插件：每次工具�
 
 ```sh
 dsh plugin add @openvulcan/dsh-decision-guard
+npx @openvulcan/vulcan-decision hardware
+npx @openvulcan/vulcan-decision model download   # 下载地址发布后可用
 npx @openvulcan/vulcan-decision model install <模型目录> --size 0.2b
 ```
 

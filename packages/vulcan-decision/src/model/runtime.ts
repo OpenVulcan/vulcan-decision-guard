@@ -7,13 +7,15 @@ import ort from 'onnxruntime-node'
 
 import type { Decision, DecisionOptions, Verdict } from '../protocol.js'
 import { CallEncoder, decide, planBatches, TokenLimitError, type EncodedCall } from './encoder.js'
-import { readRuntimeConfig, type DeviceClass, type GraphVariant, type InstalledModel, type RuntimeConfig } from './package.js'
+import { detectHardware, deviceClassOf, recommendedPrecision, recommendedProvider, type Provider } from './hardware.js'
+import { readRuntimeConfig, type GraphVariant, type InstalledModel, type RuntimeConfig } from './package.js'
 
-/** Selects the execution provider; `cpu` unless set. GPU providers are experimental. */
+/**
+ * Selects the execution provider: `auto` (the default) takes the recommended one for this machine;
+ * `cpu`, `dml` or `cuda` is used as given, and a provider that cannot load is an error, never a
+ * silent switch to another one.
+ */
 export const DEVICE_ENV = 'VULCAN_DECISION_DEVICE'
-
-/** Execution providers the service can request from onnxruntime-node. */
-type Provider = 'cpu' | 'dml' | 'cuda'
 
 /** One call to judge, already rendered in the model's text format. */
 export interface ModelInput {
@@ -44,8 +46,16 @@ export class LoadedModel {
   static async load(model: InstalledModel): Promise<LoadedModel> {
     const config = readRuntimeConfig(model.root)
     const provider = requestedProvider()
-    const deviceClass: DeviceClass = provider === 'cpu' ? 'cpu' : 'gpu'
-    const variant = model.manifest.variants.find(item => item.devices.includes(deviceClass))
+    const state = detectHardware().providers.find(item => item.provider === provider)
+    if (state?.unavailable !== undefined) {
+      const missing = state.missing === undefined ? '' : ` (missing ${state.missing.join(', ')})`
+      throw new Error(`${DEVICE_ENV}=${provider} cannot run here: ${state.unavailable}${missing}; run "vulcan-decision hardware" for details`)
+    }
+    const deviceClass = deviceClassOf(provider)
+    const verified = model.manifest.variants.filter(item => item.devices.includes(deviceClass))
+    // The recommended format for the provider first, then the package's own order.
+    const preferred = recommendedPrecision(provider, detectHardware())
+    const variant = verified.find(item => item.precision === preferred) ?? verified[0]
     if (variant === undefined) throw new Error(`${model.manifest.id} has no graph verified on ${deviceClass}`)
     const encoder = await CallEncoder.load(model.root, config)
     const session = await ort.InferenceSession.create(path.join(model.root, variant.file), {
@@ -140,8 +150,10 @@ export class LoadedModel {
   }
 }
 
-function requestedProvider(): Provider {
-  const value = process.env[DEVICE_ENV] ?? 'cpu'
+/** The provider `VULCAN_DECISION_DEVICE` asks for, resolving `auto` from this machine. */
+export function requestedProvider(): Provider {
+  const value = process.env[DEVICE_ENV] || 'auto'
+  if (value === 'auto') return recommendedProvider(detectHardware())
   if (value === 'cpu' || value === 'dml' || value === 'cuda') return value
-  throw new Error(`${DEVICE_ENV} must be cpu, dml or cuda, not ${value}`)
+  throw new Error(`${DEVICE_ENV} must be auto, cpu, dml or cuda, not ${value}`)
 }

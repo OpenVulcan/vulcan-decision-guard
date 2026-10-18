@@ -3,8 +3,8 @@
 为 AI 编码工具提供的权限守卫插件。AI 代理每次调用工具前，先由 Vulcan Decision 模型判断这次调用：
 安全的直接放行，拿不准的交给复核 LLM 或由你确认，危险的拦截。
 
-> 状态：v1 预览版，目前只支持 DeepSeek harness（dsh `0.2.1-rc.2`）。模型暂时从本地目录安装，下载与
-> OpenVulcan 云端判定尚未开放。设计与验证记录见 [docs/architecture.md](docs/architecture.md)。
+> 状态：v1 预览版，目前只支持 DeepSeek harness（dsh `0.2.1-rc.2`）。模型下载已就绪但下载地址尚未发布，
+> 暂时从本地目录安装；OpenVulcan 云端判定尚未开放。设计与验证记录见 [docs/architecture.md](docs/architecture.md)。
 
 ## 组成
 
@@ -14,7 +14,21 @@
 | [`@openvulcan/dsh-decision-guard`](packages/dsh-decision-guard) | dsh 插件：拦截工具调用、换算成模型的输入格式、执行判定结论，并提供设置页 |
 
 两者都是纯 Node 包（Node ≥ 20.19），不需要 Rust、Python 或单独下载 ONNX Runtime：
-`onnxruntime-node` 自带 Windows、macOS 与 Linux 的 CPU 运行库（Windows 另带 DirectML）。
+`onnxruntime-node` 自带 Windows、macOS 与 Linux 的 CPU 运行库（Windows 另带 DirectML），Linux x64 上
+的 CUDA 执行库由它的安装脚本下载。
+
+## 运行设备与模型格式
+
+服务默认自动选择运行设备：Linux x64 上 CUDA 可用时用 CUDA，Windows 上有显卡时用 DirectML，其余用 CPU；
+环境变量 `VULCAN_DECISION_DEVICE=cpu|dml|cuda` 可指定设备，指定的设备不可用时直接报错，不改用其他设备。
+GPU 上推荐半精度权重（`fp16-mixed`），CPU 与计算能力低于 5.3 的旧 NVIDIA 显卡推荐全精度（`fp32`）；推荐尺寸
+取总内存与显存中较小的一档。`npx @openvulcan/vulcan-decision hardware` 列出本机显卡、各设备是否可用及缺少
+什么，以及推荐的尺寸与格式。
+
+CUDA 需要：Linux x64、NVIDIA 驱动（`nvidia-smi` 可用）、允许 `onnxruntime-node` 的安装脚本（它下载 CUDA
+执行库），以及系统中的 CUDA 12 与 cuDNN 9（`libcudart.so.12`、`libcublas.so.12`、`libcublasLt.so.12`、
+`libcufft.so.11`、`libcurand.so.10`、`libcudnn.so.9`）。onnxruntime-node 在 Windows 上不提供 CUDA，
+NVIDIA 显卡在 Windows 上经 DirectML 运行。
 
 ## 安装（dsh）
 
@@ -25,14 +39,16 @@
    ```
 
    pnpm 会拦下 `onnxruntime-node` 的安装脚本，dsh 插件页随之提示“允许这些脚本并重试”。该脚本只在
-   Linux x64 上下载 CUDA 执行库，在 Windows 与 macOS 上什么也不做，本插件也不使用 CUDA。允许或在
-   profile 的 `pnpm-workspace.yaml` 中写入 `allowBuilds: { onnxruntime-node: false }` 都可以完成安装；
-   Linux x64 上建议写入 `false`，以免下载用不到的 CUDA 库。
+   Linux x64 上下载 CUDA 执行库，在 Windows 与 macOS 上什么也不做。Linux x64 上要用 NVIDIA 显卡就允许它；
+   不用 CUDA 时在 profile 的 `pnpm-workspace.yaml` 中写入 `allowBuilds: { onnxruntime-node: false }`
+   同样可以完成安装。
 
-2. 安装模型（从本地模型目录）：
+2. 安装模型：
 
    ```sh
-   npx @openvulcan/vulcan-decision model install <模型目录> --size 0.2b
+   npx @openvulcan/vulcan-decision hardware        # 查看推荐的设备、尺寸与格式
+   npx @openvulcan/vulcan-decision model download  # 下载推荐的模型（下载地址发布后可用）
+   npx @openvulcan/vulcan-decision model install <模型目录> --size 0.2b   # 或从本地目录安装
    npx @openvulcan/vulcan-decision status
    ```
 
