@@ -189,5 +189,8 @@ peer 依赖。插件加载时按 `@openvulcan/vulcan-decision-<platform>-<arch>/
 3. 复核 LLM 的默认提供方与配置位置。
 4. dsh 接入方式的默认值：骨架暂定自动预设，尚未最终决定。
 5. Windows named pipe 目前使用默认 ACL，需要收紧为仅当前用户。
-6. 尚未在真实 dsh 安装中验证插件加载。
+6. 冲突提示目前只写入 `ctx.logger`，`dsh web` 不会把它显示给用户，需要设置页或插件页的提示界面。
+   已在 dsh 0.2.1-rc.2（npm `next`）中验证：`dsh plugin add` 安装打包后的插件、插件加载并拉起服务、
+   权限选择器出现 Auto；Auto review 先加载时本插件仍为“运行中”。尚未验证实际工具调用的拦截
+   （需要模型调用）。
 7. （后续阶段）Codex hook 超时与崩溃时的行为，以及 Codex 桌面版与 IDE 扩展是否执行 hook。
