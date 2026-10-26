@@ -1,8 +1,9 @@
 /**
  * Browser half of the dsh plugin, shown on the Plugins page:
  *
- * - The plugin's settings page: live status, how the guard is turned on, the decision backend,
- *   review of uncertain calls, and the OpenVulcan account.
+ * - The plugin's settings page: live status, how the guard is turned on, the decision backend
+ *   with the OpenVulcan account, cloud endpoints, runtime packs and local models, and review of
+ *   uncertain calls.
  * - The Auto review conflict notice. dsh's own Auto review and Vulcan Decision both review every
  *   tool call before it runs and only one of them can provide the Auto permission preset, so the
  *   pair is a conflict, not a combination. The notice appears as a tag and a section on both
@@ -44,10 +45,6 @@ const zh = {
   'summary': '每次工具调用前由 Vulcan Decision 判定是否放行。',
   'status.title': '状态',
   'status.decision': '判定',
-  'status.decision.local': '{model}。服务在首次判定时启动；模型未安装或无法判定时，受管控的调用会询问你',
-  'status.decision.cloud': 'OpenVulcan 云端尚未开放，受管控的调用会询问你。请改用本机模型',
-  'status.decision.recommended': '本机模型，按本机配置选择已安装的尺寸',
-  'status.decision.size': '本机模型 {size}',
   'status.auto': 'Auto 权限预设',
   'status.auto.provided': '由 Vulcan Decision 提供，在权限选择器中选择「自动审查」即可启用',
   'status.auto.held': '被「自动授权审查」占用，见下方冲突提示',
@@ -59,11 +56,99 @@ const zh = {
   'tone.ask': '询问中',
   'tone.off': '未使用',
 
-  'install.title': '安装本机模型',
-  'install.body': '在终端查看本机显卡、可用的运行设备（CUDA、DirectML 或 CPU）与推荐的模型尺寸和格式：',
-  'install.download': '下载并安装推荐的模型（下载地址发布后可用）：',
-  'install.local': '或从本地目录安装：',
-  'install.status': '查看服务与已安装模型：',
+  'status.decision.local': '本机：{pack} 运行 {model}。模型在首次判定时加载；无法判定时，受管控的调用会询问你',
+  'status.decision.localMissing': '本机：尚未选择运行包与模型，受管控的调用会询问你',
+  'status.decision.cloud': 'OpenVulcan 云端：{model}',
+  'status.decision.signedOut': 'OpenVulcan 云端：尚未登录，受管控的调用会询问你',
+  'backend.cloud.hint': '默认方式，本机不安装任何运行库。工具调用的内容发送到 OpenVulcan 判定，需要登录 OpenVulcan 账号。',
+  'backend.local.hint': '在本机运行 vulcan-decision-shell 模型，工具调用的内容不出本机。需先在下方安装运行包与模型。',
+  'panel.unavailable': '无法读取本机状态：dsh 没有向本页面提供插件接口。',
+  'account.title': 'OpenVulcan 账号',
+  'account.signedOut': '未登录。登录后即可使用云端判定。',
+  'account.signedIn': '已登录{site}，凭据有效期至 {expires}。',
+  'account.reauth': '凭据轮换中断，需要重新登录。',
+  'account.site': '站点',
+  'account.site.cn': '中国站（openvulcan.cn）',
+  'account.site.global': '国际站（openvulcan.com）',
+  'account.signIn': '登录',
+  'account.waiting': '已打开 OpenVulcan 授权页，批准后自动完成登录。',
+  'account.openAgain': '打开授权页',
+  'account.cancel': '取消',
+  'account.signOut': '退出登录',
+  'account.failed': '登录失败：',
+  'account.stored': '凭据保存在 dsh 的凭据存储中，退出登录会同时注销本设备。',
+  'cloud.model': '云端模型',
+  'cloud.endpoints': '判定节点',
+  'cloud.probe': '测速',
+  'cloud.probing': '测速中…',
+  'cloud.none': '尚未测速。登录后点「测速」列出可用节点。',
+  'cloud.lock': '使用的节点',
+  'cloud.auto': '自动选择最快的节点',
+  'cloud.lock.hint': '固定节点后始终使用它，失败时也不切换到其他节点。',
+  'cloud.rtt': '往返 {ms} ms',
+  'cloud.compute': '计算 {ms} ms',
+  'cloud.selected': '使用中',
+  'cloud.excluded': '不可用',
+  'hw.title': '本机硬件与建议',
+  'hw.gpu': '{name} · {arch} · 计算能力 {cc} · 驱动 {driver}',
+  'hw.fp16.tensor-cores': 'FP16 由张量核心加速',
+  'hw.fp16.native': 'FP16 原生支持，较慢',
+  'hw.fp16.slow': 'FP16 很慢，只适合 FP32',
+  'hw.noGpu': '未发现可用的 NVIDIA 显卡。',
+  'hw.npu': '发现 NPU：{name}。NPU 运行包等待对应的 ONNX 模型发布，目前还不能安装。',
+  'hw.rec.cuda': '建议本机运行：PyTorch 模型安装 {torch}，ONNX 模型安装 {onnx}。',
+  'hw.rec.cpu_only': '建议使用云端。也可以安装 {torch} 在 CPU 上运行，判定较慢。',
+  'hw.rec.driver_update': '显卡支持 CUDA，但驱动低于运行包所需的版本。请自行从 NVIDIA 更新驱动（本插件不安装驱动），在此之前建议使用云端。',
+  'hw.rec.gpu_too_old': '显卡计算能力低于 7.5（RTX 20 系列之前），现成的 CUDA 运行库不支持它，建议使用云端。',
+  'packs.title': '运行包',
+  'packs.hint': '运行包是预编译的 Python 运行时与官方 wheel，逐个按锁定的 SHA-256 校验后安装到 {home}。不编译任何东西，也不安装驱动。',
+  'packs.source': '下载源',
+  'packs.source.official': '官方（python-build-standalone、PyPI、PyTorch）',
+  'packs.source.cn': '国内镜像（npmmirror、阿里云）',
+  'packs.install': '安装',
+  'packs.update': '更新',
+  'packs.remove': '删除',
+  'packs.installed': '已安装',
+  'packs.outdated': '有更新',
+  'packs.fit.ok': '可用',
+  'packs.fit.no_build': '本平台无构建',
+  'packs.fit.no_nvidia_gpu': '需要 NVIDIA 显卡',
+  'packs.fit.gpu_too_old': '显卡过旧',
+  'packs.fit.driver_too_old': '驱动需 ≥ {driver}',
+  'packs.planned': '规划中：{id}（{accelerator}）',
+  'job.download': '下载中 {percent}%',
+  'job.unpack': '解压中…',
+  'job.install': '安装中…',
+  'job.probe': '检查运行时…',
+  'job.verify': '校验中 {percent}%',
+  'job.done': '已完成',
+  'job.failed': '失败：{error}',
+  'job.cancelled': '已取消',
+  'job.cancel': '取消',
+  'models.title': '本机模型',
+  'models.none': '尚未安装模型。',
+  'models.remove': '删除',
+  'models.download': '下载',
+  'models.notPublished': '下载地址尚未发布',
+  'models.source.huggingface': 'Hugging Face',
+  'models.source.modelscope-intl': '魔搭国际站',
+  'models.source.modelscope-cn': '魔搭国内站',
+  'models.dir': '从本地目录安装',
+  'models.dir.placeholder': '模型包目录：PyTorch 发布仓库或 ONNX 交付目录',
+  'models.dir.install': '安装',
+  'local.pack': '使用的运行包',
+  'local.model': '使用的模型',
+  'local.pick': '请选择',
+  'local.mismatch': '所选模型需要 {backend} 运行包。',
+  'test.title': '试判定',
+  'test.hint': '用已保存的设置判定一个示例调用。',
+  'test.safe': '查看仓库状态（git status）',
+  'test.risky': '强制推送到远程（git push --force）',
+  'test.run': '判定',
+  'test.running': '判定中…',
+  'test.result': '{decision}，用时 {ms} ms（{backend} · {via}）',
+  'test.failed': '判定失败：',
+
   'mode.title': '接入方式',
   'mode.auto-preset': '自动预设',
   'mode.auto-preset.hint': '在权限选择器中提供「自动审查」，只判定选择它的会话。该预设固定为完全权限，不使用文件沙箱。',
@@ -71,12 +156,7 @@ const zh = {
   'mode.standalone.hint': '判定所有会话，叠加在会话所选的权限预设之上，保留其文件沙箱。',
   'backend.title': '判定后端',
   'backend.cloud': 'OpenVulcan 云端',
-  'backend.cloud.hint': '尚未开放。工具调用的内容将发送到 OpenVulcan 判定，需要登录 OpenVulcan 账号。',
   'backend.local': '本机模型',
-  'backend.local.hint': '在本机运行 vulcan-decision-shell 模型，工具调用的内容不出本机。',
-  'model.title': '模型尺寸',
-  'model.recommended': '按本机配置推荐',
-  'model.hint': '尺寸越大判定越准确，占用的内存与时间也越多。所选尺寸必须已安装。',
   'review.title': 'LLM 二次审核',
   'review.session': '当前会话的模型',
   'review.session.hint': '判定模型未放行的调用先交给会话正在使用的模型审核。审核会消耗该模型的用量。',
@@ -121,9 +201,6 @@ const zh = {
   'project.confirm.hint': '删除或重置整个当前项目、改写其版本历史需要确认。',
   'project.allow': '允许',
   'project.allow.hint': '只允许针对当前项目；其他项目、上级目录与系统不在此列。',
-  'account.title': 'OpenVulcan 账号',
-  'account.none': '尚未开放。云端判定上线后在这里登录。',
-  'account.signIn': '登录',
 
   'form.unavailable': 'dsh 未提供本插件的设置。',
   'form.readOnly': '当前配置为只读，无法保存。',
@@ -167,10 +244,6 @@ const en: Record<Key, string> = {
   'summary': 'Vulcan Decision judges every tool call before it runs.',
   'status.title': 'Status',
   'status.decision': 'Decisions',
-  'status.decision.local': '{model}. The service starts on the first decision; when the model is not installed or cannot judge, governed calls ask you',
-  'status.decision.cloud': 'OpenVulcan cloud is not available yet, so governed calls ask you. Choose the local model',
-  'status.decision.recommended': 'Local model, the installed size this machine suits',
-  'status.decision.size': 'Local model {size}',
   'status.auto': 'Auto permission preset',
   'status.auto.provided': 'Provided by Vulcan Decision; choose Auto in the permission picker to use it',
   'status.auto.held': 'Held by Auto review; see the conflict notice below',
@@ -182,11 +255,99 @@ const en: Record<Key, string> = {
   'tone.ask': 'Asking',
   'tone.off': 'Not used',
 
-  'install.title': 'Install the local model',
-  'install.body': 'Check the graphics cards of this machine, the usable devices (CUDA, DirectML or CPU) and the recommended model size and format in a terminal:',
-  'install.download': 'Download and install the recommended model (once its address is published):',
-  'install.local': 'Or install one from a local directory:',
-  'install.status': 'Check the service and installed models:',
+  'status.decision.local': 'Local: {model} on {pack}. The model loads on the first decision; when it cannot judge, governed calls ask you',
+  'status.decision.localMissing': 'Local: no runtime pack and model are chosen, so governed calls ask you',
+  'status.decision.cloud': 'OpenVulcan cloud: {model}',
+  'status.decision.signedOut': 'OpenVulcan cloud: not signed in, so governed calls ask you',
+  'backend.cloud.hint': 'The default; nothing is installed on this machine. Tool calls are sent to OpenVulcan to be judged, with an OpenVulcan sign-in.',
+  'backend.local.hint': 'Runs a vulcan-decision-shell model on this machine, so tool calls never leave it. Install a runtime pack and a model below first.',
+  'panel.unavailable': 'Cannot read this machine\'s state: dsh offers this page no plugin routes.',
+  'account.title': 'OpenVulcan account',
+  'account.signedOut': 'Not signed in. Sign in to use cloud decisions.',
+  'account.signedIn': 'Signed in to {site}, valid until {expires}.',
+  'account.reauth': 'A credential rotation was interrupted; sign in again.',
+  'account.site': 'Site',
+  'account.site.cn': 'China (openvulcan.cn)',
+  'account.site.global': 'Global (openvulcan.com)',
+  'account.signIn': 'Sign in',
+  'account.waiting': 'The OpenVulcan approval page is open; signing in finishes once you approve.',
+  'account.openAgain': 'Open the approval page',
+  'account.cancel': 'Cancel',
+  'account.signOut': 'Sign out',
+  'account.failed': 'Sign-in failed: ',
+  'account.stored': 'The credential is kept in dsh\'s credential store; signing out also revokes this device.',
+  'cloud.model': 'Cloud model',
+  'cloud.endpoints': 'Endpoints',
+  'cloud.probe': 'Measure',
+  'cloud.probing': 'Measuring…',
+  'cloud.none': 'Not measured yet. Sign in, then Measure to list the endpoints.',
+  'cloud.lock': 'Endpoint to use',
+  'cloud.auto': 'The fastest measured endpoint',
+  'cloud.lock.hint': 'A chosen endpoint is always used and never replaced, even when it fails.',
+  'cloud.rtt': 'round trip {ms} ms',
+  'cloud.compute': 'compute {ms} ms',
+  'cloud.selected': 'In use',
+  'cloud.excluded': 'Unavailable',
+  'hw.title': 'This machine and the recommendation',
+  'hw.gpu': '{name} · {arch} · compute capability {cc} · driver {driver}',
+  'hw.fp16.tensor-cores': 'FP16 on tensor cores',
+  'hw.fp16.native': 'native FP16, slower',
+  'hw.fp16.slow': 'slow FP16, FP32 only',
+  'hw.noGpu': 'No usable NVIDIA card was found.',
+  'hw.npu': 'NPU found: {name}. NPU runtime packs wait for an ONNX model exported for them and cannot be installed yet.',
+  'hw.rec.cuda': 'Run locally: install {torch} for PyTorch models and {onnx} for ONNX models.',
+  'hw.rec.cpu_only': 'Use the cloud. {torch} can also run models on the CPU, more slowly.',
+  'hw.rec.driver_update': 'The card supports CUDA but its driver is older than the packs need. Update it from NVIDIA yourself (this plugin installs no drivers); until then, use the cloud.',
+  'hw.rec.gpu_too_old': 'The card\'s compute capability is below 7.5 (older than RTX 20), which the prebuilt CUDA runtimes do not support; use the cloud.',
+  'packs.title': 'Runtime packs',
+  'packs.hint': 'A runtime pack is a prebuilt Python runtime with official wheels, each checked against its locked SHA-256 and installed under {home}. Nothing is compiled and no driver is installed.',
+  'packs.source': 'Download from',
+  'packs.source.official': 'Official hosts (python-build-standalone, PyPI, PyTorch)',
+  'packs.source.cn': 'Mirrors in China (npmmirror, Aliyun)',
+  'packs.install': 'Install',
+  'packs.update': 'Update',
+  'packs.remove': 'Remove',
+  'packs.installed': 'Installed',
+  'packs.outdated': 'Update available',
+  'packs.fit.ok': 'Usable',
+  'packs.fit.no_build': 'No build for this platform',
+  'packs.fit.no_nvidia_gpu': 'Needs an NVIDIA card',
+  'packs.fit.gpu_too_old': 'Card too old',
+  'packs.fit.driver_too_old': 'Needs driver {driver} or newer',
+  'packs.planned': 'Planned: {id} ({accelerator})',
+  'job.download': 'Downloading {percent}%',
+  'job.unpack': 'Unpacking…',
+  'job.install': 'Installing…',
+  'job.probe': 'Checking the runtime…',
+  'job.verify': 'Verifying {percent}%',
+  'job.done': 'Done',
+  'job.failed': 'Failed: {error}',
+  'job.cancelled': 'Cancelled',
+  'job.cancel': 'Cancel',
+  'models.title': 'Local models',
+  'models.none': 'No model is installed.',
+  'models.remove': 'Remove',
+  'models.download': 'Download',
+  'models.notPublished': 'Not published yet',
+  'models.source.huggingface': 'Hugging Face',
+  'models.source.modelscope-intl': 'ModelScope (international)',
+  'models.source.modelscope-cn': 'ModelScope (China)',
+  'models.dir': 'Install from a local directory',
+  'models.dir.placeholder': 'Package directory: a PyTorch release repository or an ONNX delivery',
+  'models.dir.install': 'Install',
+  'local.pack': 'Runtime pack to use',
+  'local.model': 'Model to use',
+  'local.pick': 'Choose',
+  'local.mismatch': 'The chosen model needs a {backend} runtime pack.',
+  'test.title': 'Try a decision',
+  'test.hint': 'Judges a sample call with the saved settings.',
+  'test.safe': 'Show the repository status (git status)',
+  'test.risky': 'Force-push to the remote (git push --force)',
+  'test.run': 'Judge',
+  'test.running': 'Judging…',
+  'test.result': '{decision} in {ms} ms ({backend} · {via})',
+  'test.failed': 'Decision failed: ',
+
   'mode.title': 'How the guard is turned on',
   'mode.auto-preset': 'Auto preset',
   'mode.auto-preset.hint': 'Adds Auto to the permission picker and judges only sessions that choose it. That preset always has full access and no file sandbox.',
@@ -194,12 +355,7 @@ const en: Record<Key, string> = {
   'mode.standalone.hint': 'Judges every session on top of the permission preset it chose, keeping that preset\'s file sandbox.',
   'backend.title': 'Decision backend',
   'backend.cloud': 'OpenVulcan cloud',
-  'backend.cloud.hint': 'Not available yet. Tool calls will be sent to OpenVulcan to be judged, with an OpenVulcan sign-in.',
   'backend.local': 'Local model',
-  'backend.local.hint': 'Runs the vulcan-decision-shell model on this machine, so tool calls never leave it.',
-  'model.title': 'Model size',
-  'model.recommended': 'Recommended for this machine',
-  'model.hint': 'Larger sizes judge more accurately and use more memory and time. The chosen size must be installed.',
   'review.title': 'LLM review',
   'review.session': 'The session\'s model',
   'review.session.hint': 'Calls the decision model did not allow are first reviewed by the model the session uses. Reviews count toward that model\'s usage.',
@@ -244,9 +400,6 @@ const en: Record<Key, string> = {
   'project.confirm.hint': 'Deleting or resetting the whole current project, or rewriting its history, needs confirmation.',
   'project.allow': 'Allow',
   'project.allow.hint': 'Only for the current project; other projects, parent directories and the system are not covered.',
-  'account.title': 'OpenVulcan account',
-  'account.none': 'Not available yet. Sign in here once cloud decisions ship.',
-  'account.signIn': 'Sign in',
 
   'form.unavailable': 'dsh does not serve this plugin\'s settings.',
   'form.readOnly': 'The configuration is read-only, so changes cannot be saved.',
@@ -278,7 +431,11 @@ const en: Record<Key, string> = {
 interface GuardSettings {
   readonly mode: 'auto-preset' | 'standalone'
   readonly backend: 'cloud' | 'local'
-  readonly modelSize?: '0.2b' | '0.4b' | '0.6b' | undefined
+  readonly cloudModel: string
+  readonly cloudEndpoint?: string | undefined
+  readonly localPack?: string | undefined
+  readonly localModel?: string | undefined
+  readonly downloadSource: 'official' | 'cn'
   readonly review: 'session' | 'custom' | 'off'
   readonly reviewProvider?: string | undefined
   readonly reviewModel?: string | undefined
@@ -343,14 +500,100 @@ function guardApprovalOf(interaction: unknown): GuardApproval | null {
   }
 }
 
-/** Terminal commands shown for choosing, installing a model and checking the service. */
-const HARDWARE_COMMAND = 'npx @openvulcan/vulcan-decision hardware'
-const DOWNLOAD_COMMAND = 'npx @openvulcan/vulcan-decision model download'
-const INSTALL_COMMAND = 'npx @openvulcan/vulcan-decision model install <model directory> --size 0.2b'
-const STATUS_COMMAND = 'npx @openvulcan/vulcan-decision status'
+/** Browser-relative form of `ROUTE_PREFIX` in `src/panel.ts`. */
+const ROUTE_BASE = 'api/vulcan-decision/'
 
-/** The model sizes offered, in order; `''` stands for the device recommendation (field unset). */
-const MODEL_SIZES = ['', '0.2b', '0.4b', '0.6b'] as const
+/** What `Panel.state()` in `src/panel.ts` answers. */
+interface PanelState {
+  readonly account: { readonly signedIn: boolean; readonly site?: 'cn' | 'global'; readonly expiresAt?: string; readonly reauthRequired?: boolean }
+  readonly signIn: { readonly approvalUrl: string; readonly expiresAt: string } | null
+  readonly signInError?: string
+  readonly cloud: {
+    readonly models: readonly string[]
+    readonly endpoints: readonly {
+      readonly endpoint_id: string
+      readonly online: boolean
+      readonly probe?: {
+        readonly rtt_ms?: number
+        readonly excluded?: string
+        readonly status?: { readonly region?: string; readonly compute_ms: { readonly p50: number } | null }
+      }
+    }[]
+    readonly selected?: string
+  }
+  readonly hardware: {
+    readonly gpus: readonly {
+      readonly name: string
+      readonly vendor: string
+      readonly computeCapability?: string
+      readonly driver?: string
+      readonly generation?: { readonly architecture: string; readonly fp16: 'tensor-cores' | 'native' | 'slow'; readonly supported: boolean }
+    }[]
+    readonly npus: readonly { readonly name: string }[]
+  }
+  readonly recommendation: {
+    readonly torchPack: string
+    readonly onnxPack: string
+    readonly reason: 'cuda' | 'cpu_only' | 'driver_update' | 'gpu_too_old'
+    readonly npuWaiting: boolean
+  }
+  readonly packs: readonly {
+    readonly id: string
+    readonly backend: 'onnx' | 'torch'
+    readonly device: string
+    readonly fit: 'ok' | 'no_build' | 'no_nvidia_gpu' | 'gpu_too_old' | 'driver_too_old'
+    readonly bytes?: number
+    readonly needsDriver?: string
+    readonly installed: { readonly outdated: boolean } | null
+  }[]
+  readonly planned: readonly { readonly id: string; readonly accelerator: string }[]
+  readonly models: readonly { readonly id: string; readonly name: string; readonly format: 'onnx-delivery' | 'torch-release'; readonly bytes: number }[]
+  readonly catalog: readonly { readonly family: string; readonly name: string; readonly parameters: string; readonly sources: readonly string[] }[]
+  readonly job: {
+    readonly kind: 'pack' | 'model-download' | 'model-directory'
+    readonly target: string
+    readonly phase: 'download' | 'unpack' | 'install' | 'probe' | 'verify' | 'done' | 'failed' | 'cancelled'
+    readonly done?: number
+    readonly total?: number
+    readonly error?: string
+  } | null
+  readonly home: string
+}
+
+type Job = NonNullable<PanelState['job']>
+
+/** Download points of the published models, as `MODEL_SOURCES` in the core package lists them. */
+const MODEL_SOURCES = ['modelscope-cn', 'modelscope-intl', 'huggingface'] as const
+
+/** Sample calls for trying the backend. */
+const TEST_CALLS = {
+  safe: { tool: 'shell_command', args: { command: 'git status', shell: 'bash' } },
+  risky: { tool: 'shell_command', args: { command: 'git push --force origin main', shell: 'bash' } },
+} as const
+
+/** Call one panel route; rejects with the Host's message when it fails. */
+async function callPanel<T>(method: 'GET' | 'POST', route: string, body?: unknown): Promise<T> {
+  const response = await fetch(`${ROUTE_BASE}${route}`, {
+    method,
+    ...body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) },
+  })
+  const answer = await response.json().catch(() => undefined) as { ok?: boolean; value?: T; error?: { message?: string } } | undefined
+  if (answer?.ok !== true) throw new Error(answer?.error?.message ?? `HTTP ${response.status}`)
+  return answer.value as T
+}
+
+function running(job: PanelState['job']): boolean {
+  return job !== null && !['done', 'failed', 'cancelled'].includes(job.phase)
+}
+
+/** Replace `{name}` placeholders. */
+function fill(text: string, values: Record<string, string | number>): string {
+  return text.replace(/\{(\w+)\}/g, (whole, name: string) => (name in values ? String(values[name]) : whole))
+}
+
+function mebibytes(bytes: number): string {
+  return `${Math.round(bytes / 1024 ** 2)} MiB`
+}
 
 /**
  * Latest-answer-wins view of one Host fact, shared by every rendered entry. `undefined` means
@@ -474,6 +717,8 @@ export function apply(ctx: ClientContext): void {
     const result = await ctx.remote.permissionPresets.catalog()
     return result.ok ? result.value.options.some(option => option.value === AUTO_PRESET) : undefined
   })
+  // null: the routes did not answer (no connection, or an older Host).
+  const panelState = new HostWatch<PanelState | null>(() => callPanel<PanelState>('GET', 'state').catch(() => null))
   const modelCatalog = new HostWatch<ModelCatalog>(async () => {
     const result = await ctx.remote.session.modelCatalog()
     return result.ok ? result.value : undefined
@@ -500,6 +745,7 @@ export function apply(ctx: ClientContext): void {
       autoReview.close()
       autoListed.close()
       modelCatalog.close()
+      panelState.close()
     }
   }, 'vulcan-decision-guard: Host state')
 
@@ -592,23 +838,26 @@ export function apply(ctx: ClientContext): void {
     return { tone: 'quiet', text: 'status.auto.pending', toneText: 'status.auto.pending' } as const
   }
 
-  /**
-   * What the page shows about decisions. Whether a model is installed is known only to the
-   * service on this machine, which dsh offers no channel to read from here, so the row states the
-   * saved choice and what happens when the model is missing.
-   */
-  function decisionStatus(value: GuardSettings | undefined, t: (key: Key) => string) {
-    if (value === undefined) return { tone: 'quiet', text: t('status.unknown'), toneText: t('status.unknown') } as const
-    if (value.backend === 'cloud') return { tone: 'warning', text: t('status.decision.cloud'), toneText: t('tone.ask') } as const
-    const model = value.modelSize === undefined ? t('status.decision.recommended') : t('status.decision.size').replace('{size}', value.modelSize.toUpperCase())
-    return { tone: 'success', text: t('status.decision.local').replace('{model}', model), toneText: t('tone.ok') } as const
+  /** What the page shows about decisions, from the saved settings and this machine's state. */
+  function decisionStatus(value: GuardSettings | undefined, live: PanelState | null | undefined, t: (key: Key) => string) {
+    if (value === undefined || live == null) return { tone: 'quiet', text: t('status.unknown'), toneText: t('status.unknown') } as const
+    if (value.backend === 'cloud') {
+      return live.account.signedIn
+        ? { tone: 'success', text: fill(t('status.decision.cloud'), { model: value.cloudModel }), toneText: t('tone.ok') } as const
+        : { tone: 'warning', text: t('status.decision.signedOut'), toneText: t('tone.ask') } as const
+    }
+    const pack = live.packs.find(item => item.id === value.localPack && item.installed !== null)
+    const model = live.models.find(item => item.id === value.localModel)
+    if (pack === undefined || model === undefined) return { tone: 'warning', text: t('status.decision.localMissing'), toneText: t('tone.ask') } as const
+    return { tone: 'success', text: fill(t('status.decision.local'), { pack: pack.id, model: model.name }), toneText: t('tone.ok') } as const
   }
 
   function StatusSection({ t, value }: { t: (key: Key) => string; value: GuardSettings | undefined }) {
     const heldByReview = useSyncExternalStore(autoReview.subscribe, autoReview.getSnapshot)
     const listed = useSyncExternalStore(autoListed.subscribe, autoListed.getSnapshot)
+    const live = useSyncExternalStore(panelState.subscribe, panelState.getSnapshot)
     const auto = autoStatus(value?.mode, heldByReview, listed)
-    const decision = decisionStatus(value, t)
+    const decision = decisionStatus(value, live, t)
     return (
       <section style={styles.section}>
         <h4 style={styles.heading}>{t('status.title')}</h4>
@@ -763,13 +1012,455 @@ export function apply(ctx: ClientContext): void {
     )
   }
 
+  /** Run panel actions one at a time, keeping the last failure to show next to them. */
+  function useAction() {
+    const [busy, setBusy] = useState<string | undefined>(undefined)
+    const [error, setError] = useState<string | undefined>(undefined)
+    const act = (name: string, work: () => Promise<unknown>): void => {
+      setBusy(name)
+      setError(undefined)
+      work().catch((failure: unknown) => {
+        setError(failure instanceof Error ? failure.message : String(failure))
+      }).finally(() => {
+        setBusy(undefined)
+        panelState.refresh()
+      })
+    }
+    return { busy, error, act }
+  }
+
+  function ErrorLine({ text }: { text: string | undefined }) {
+    return text === undefined ? null : <p style={{ ...styles.hint, color: 'var(--dsw-alias-state-error-primary)' }}>{text}</p>
+  }
+
+  /** The listed values, plus a saved one the list no longer has, so a saved choice never silently changes. */
+  function withSaved(values: readonly string[], saved: string): string[] {
+    return saved === '' || values.includes(saved) ? [...values] : [saved, ...values]
+  }
+
+  type PanelField = 'cloudModel' | 'cloudEndpoint' | 'localPack' | 'localModel' | 'downloadSource'
+
+  interface SectionProps {
+    readonly t: (key: Key) => string
+    readonly live: PanelState
+    readonly text: (field: Field) => string
+    readonly disabled: boolean
+    readonly edit: (field: PanelField, next: string | undefined) => void
+  }
+
+  /** The live part of the settings: the account and endpoints for the cloud, packs and models for local. */
+  function RuntimePanel({ t, backend, text, disabled, edit }: Omit<SectionProps, 'live'> & { backend: GuardSettings['backend'] }) {
+    const live = useSyncExternalStore(panelState.subscribe, panelState.getSnapshot)
+    const active = live != null && (live.signIn !== null || running(live.job))
+    useEffect(() => { panelState.refresh() }, [])
+    useEffect(() => {
+      if (!active) return undefined
+      const timer = setInterval(() => { panelState.refresh() }, 1000)
+      return () => { clearInterval(timer) }
+    }, [active])
+    if (live === undefined) return <p style={styles.hint}>{t('status.unknown')}</p>
+    if (live === null) return <p style={styles.notice}>{t('panel.unavailable')}</p>
+    return (
+      <>
+        {backend === 'cloud'
+          ? <CloudSection t={t} live={live} text={text} disabled={disabled} edit={edit} />
+          : <LocalSection t={t} live={live} text={text} disabled={disabled} edit={edit} />}
+        <TestSection t={t} />
+      </>
+    )
+  }
+
+  function CloudSection({ t, live, text, disabled, edit }: SectionProps) {
+    const account = live.account
+    const [site, setSite] = useState<'cn' | 'global'>(account.site ?? (navigator.language.toLowerCase().startsWith('zh') ? 'cn' : 'global'))
+    const { busy, error, act } = useAction()
+    const siteId = useId()
+    const modelId = useId()
+    const lockId = useId()
+    const signIn = (): void => {
+      // Opened during the click, so no popup blocker stops it, and pointed at the page once known.
+      const popup = window.open('about:blank', '_blank')
+      act('signin', async () => {
+        try {
+          const { approvalUrl } = await callPanel<{ approvalUrl: string }>('POST', `signin?site=${site}`)
+          if (popup !== null) {
+            popup.opener = null
+            popup.location.href = approvalUrl
+          }
+        } catch (failure) {
+          popup?.close()
+          throw failure
+        }
+      })
+    }
+    const lock = text('cloudEndpoint')
+    const endpoints = live.cloud.endpoints
+    const row = { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } as const
+    return (
+      <>
+        <section style={styles.section}>
+          <h4 style={styles.heading}>{t('account.title')}</h4>
+          <div style={{ ...styles.card, padding: '12px 16px', gap: 10 }}>
+            {account.signedIn
+              ? (
+                <span style={styles.optionTitle}>
+                  {fill(t('account.signedIn'), {
+                    site: t(`account.site.${account.site ?? 'global'}` as Key),
+                    expires: account.expiresAt === undefined ? '' : new Date(account.expiresAt).toLocaleString(),
+                  })}
+                </span>
+              )
+              : <span style={styles.hint}>{t(account.reauthRequired === true ? 'account.reauth' : 'account.signedOut')}</span>}
+            {live.signIn !== null
+              ? (
+                <div style={row}>
+                  <span style={styles.hint}>{t('account.waiting')}</span>
+                  <a href={live.signIn.approvalUrl} target="_blank" rel="noopener noreferrer" style={styles.hint}>{t('account.openAgain')}</a>
+                  <Button variant="outline" size="sm" disabled={busy !== undefined} onClick={() => { act('cancel', () => callPanel('POST', 'signin/cancel')) }}>
+                    {t('account.cancel')}
+                  </Button>
+                </div>
+              )
+              : account.signedIn
+                ? (
+                  <div style={row}>
+                    <Button variant="outline" size="sm" disabled={busy !== undefined} onClick={() => { act('signout', () => callPanel('POST', 'signout')) }}>
+                      {t('account.signOut')}
+                    </Button>
+                  </div>
+                )
+                : (
+                  <div style={row}>
+                    <label htmlFor={siteId} style={styles.hint}>{t('account.site')}</label>
+                    <select id={siteId} style={styles.select} value={site} onChange={(event) => { setSite(event.target.value === 'cn' ? 'cn' : 'global') }}>
+                      <option value="cn">{t('account.site.cn')}</option>
+                      <option value="global">{t('account.site.global')}</option>
+                    </select>
+                    <Button variant="primary" size="sm" disabled={busy !== undefined} onClick={signIn}>{t('account.signIn')}</Button>
+                  </div>
+                )}
+            <ErrorLine text={live.signInError === undefined ? undefined : t('account.failed') + live.signInError} />
+            <ErrorLine text={error} />
+            <span style={styles.hint}>{t('account.stored')}</span>
+          </div>
+        </section>
+        <section style={styles.section}>
+          <label htmlFor={modelId} style={styles.heading}>{t('cloud.model')}</label>
+          <select id={modelId} style={styles.select} value={text('cloudModel')} disabled={disabled} onChange={(event) => { edit('cloudModel', event.target.value) }}>
+            {withSaved(live.cloud.models, text('cloudModel')).map(model => <option key={model} value={model}>{model}</option>)}
+          </select>
+        </section>
+        <section style={styles.section}>
+          <div style={{ ...row, justifyContent: 'space-between' }}>
+            <h4 style={styles.heading}>{t('cloud.endpoints')}</h4>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!account.signedIn || busy !== undefined}
+              onClick={() => { act('probe', () => callPanel('POST', `cloud/probe?model=${encodeURIComponent(text('cloudModel'))}`)) }}
+            >
+              {t(busy === 'probe' ? 'cloud.probing' : 'cloud.probe')}
+            </Button>
+          </div>
+          {endpoints.length === 0
+            ? <p style={styles.hint}>{t('cloud.none')}</p>
+            : (
+              <div style={styles.card}>
+                {endpoints.map((endpoint, index) => {
+                  const probe = endpoint.probe
+                  const compute = probe?.status?.compute_ms
+                  const facts = [
+                    probe?.status?.region,
+                    probe?.rtt_ms === undefined ? undefined : fill(t('cloud.rtt'), { ms: Math.round(probe.rtt_ms) }),
+                    compute == null ? undefined : fill(t('cloud.compute'), { ms: Math.round(compute.p50) }),
+                  ].filter(fact => fact !== undefined).join(' · ')
+                  return (
+                    <div key={endpoint.endpoint_id} style={{ ...styles.statusRow, ...(index === 0 ? {} : styles.divider) }}>
+                      <span style={styles.statusLabel}>{endpoint.endpoint_id}</span>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                        <span style={styles.statusText}>{facts}</span>
+                        {endpoint.endpoint_id === live.cloud.selected ? <Tag tone="success">{t('cloud.selected')}</Tag> : null}
+                        {probe?.excluded !== undefined || !endpoint.online ? <Tag tone="warning">{t('cloud.excluded')}</Tag> : null}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          <label htmlFor={lockId} style={styles.hint}>{t('cloud.lock')}</label>
+          <select
+            id={lockId}
+            style={styles.select}
+            value={lock}
+            disabled={disabled}
+            onChange={(event) => { edit('cloudEndpoint', event.target.value === '' ? undefined : event.target.value) }}
+          >
+            <option value="">{t('cloud.auto')}</option>
+            {withSaved(endpoints.map(endpoint => endpoint.endpoint_id), lock).map(id => <option key={id} value={id}>{id}</option>)}
+          </select>
+          <p style={styles.hint}>{t('cloud.lock.hint')}</p>
+        </section>
+      </>
+    )
+  }
+
+  function JobLine({ t, job, onCancel }: { t: (key: Key) => string; job: Job; onCancel: () => void }) {
+    const percent = job.total === undefined || job.total === 0 ? 0 : Math.floor(((job.done ?? 0) / job.total) * 100)
+    const failed = job.phase === 'failed'
+    return (
+      <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {job.phase === 'download' || job.phase === 'verify' ? <progress max={100} value={percent} style={{ flex: 1 }} /> : null}
+        <span style={{ ...styles.hint, ...failed ? { color: 'var(--dsw-alias-state-error-primary)' } : {} }}>
+          {fill(t(`job.${job.phase}` as Key), { percent, error: job.error ?? '' })}
+        </span>
+        {running(job) ? <Button variant="outline" size="sm" onClick={onCancel}>{t('job.cancel')}</Button> : null}
+      </span>
+    )
+  }
+
+  function LocalSection({ t, live, text, disabled, edit }: SectionProps) {
+    const { busy, error, act } = useAction()
+    const [dir, setDir] = useState('')
+    const [modelSource, setModelSource] = useState<typeof MODEL_SOURCES[number]>(MODEL_SOURCES[0])
+    const sourceId = useId()
+    const modelSourceId = useId()
+    const dirId = useId()
+    const packId = useId()
+    const modelId = useId()
+    const job = live.job
+    const idle = !running(job) && busy === undefined
+    const source = text('downloadSource') === 'cn' ? 'cn' : 'official'
+    const recommendation = live.recommendation
+    const cards = live.hardware.gpus.filter(gpu => gpu.generation !== undefined)
+    const chosenPack = live.packs.find(item => item.id === text('localPack'))
+    const chosenModel = live.models.find(item => item.id === text('localModel'))
+    const needed = chosenModel === undefined ? undefined : chosenModel.format === 'onnx-delivery' ? 'onnx' : 'torch'
+    const cancel = (): void => { act('cancel', () => callPanel('POST', 'job/cancel')) }
+    const jobOf = (kind: Job['kind'], target?: string) => (
+      job === null || job.kind !== kind || (target !== undefined && job.target !== target) ? null : <JobLine t={t} job={job} onCancel={cancel} />
+    )
+    const between = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' } as const
+    const inline = { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } as const
+    const item = (index: number) => ({ ...styles.option, cursor: 'default', flexDirection: 'column', gap: 6, ...index === 0 ? {} : styles.divider } as const)
+    return (
+      <>
+        <section style={styles.section}>
+          <h4 style={styles.heading}>{t('hw.title')}</h4>
+          <div style={{ ...styles.notice, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {cards.length === 0
+              ? <span>{t('hw.noGpu')}</span>
+              : cards.map(gpu => (
+                <span key={gpu.name}>
+                  {fill(t('hw.gpu'), { name: gpu.name, arch: gpu.generation!.architecture, cc: gpu.computeCapability ?? '?', driver: gpu.driver ?? '?' })}
+                  {' · '}
+                  {t(`hw.fp16.${gpu.generation!.fp16}` as Key)}
+                </span>
+              ))}
+            {live.hardware.npus.map(npu => <span key={npu.name}>{fill(t('hw.npu'), { name: npu.name })}</span>)}
+            <strong style={{ fontWeight: 500 }}>
+              {fill(t(`hw.rec.${recommendation.reason}` as Key), { torch: recommendation.torchPack, onnx: recommendation.onnxPack })}
+            </strong>
+          </div>
+        </section>
+        <section style={styles.section}>
+          <h4 style={styles.heading}>{t('packs.title')}</h4>
+          <p style={styles.hint}>{fill(t('packs.hint'), { home: live.home })}</p>
+          <div style={inline}>
+            <label htmlFor={sourceId} style={styles.hint}>{t('packs.source')}</label>
+            <select id={sourceId} style={styles.select} value={source} disabled={disabled} onChange={(event) => { edit('downloadSource', event.target.value) }}>
+              <option value="official">{t('packs.source.official')}</option>
+              <option value="cn">{t('packs.source.cn')}</option>
+            </select>
+          </div>
+          <div style={styles.card}>
+            {live.packs.map((pack, index) => (
+              <div key={pack.id} style={item(index)}>
+                <div style={between}>
+                  <span style={inline}>
+                    <span style={styles.optionTitle}>{pack.id}</span>
+                    <Tag tone={pack.fit === 'ok' ? 'neutral' : 'warning'}>{fill(t(`packs.fit.${pack.fit}` as Key), { driver: pack.needsDriver ?? '' })}</Tag>
+                    {pack.installed === null
+                      ? null
+                      : <Tag tone={pack.installed.outdated ? 'warning' : 'success'}>{t(pack.installed.outdated ? 'packs.outdated' : 'packs.installed')}</Tag>}
+                    {pack.bytes === undefined ? null : <span style={styles.hint}>{mebibytes(pack.bytes)}</span>}
+                  </span>
+                  <span style={{ display: 'flex', gap: 8 }}>
+                    {pack.installed === null || pack.installed.outdated
+                      ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={pack.fit !== 'ok' || !idle}
+                          onClick={() => { act('install', () => callPanel('POST', `packs/install?pack=${pack.id}&source=${source}`)) }}
+                        >
+                          {t(pack.installed === null ? 'packs.install' : 'packs.update')}
+                        </Button>
+                      )
+                      : null}
+                    {pack.installed === null
+                      ? null
+                      : (
+                        <Button variant="outline" size="sm" disabled={!idle} onClick={() => { act('remove', () => callPanel('POST', `packs/remove?pack=${pack.id}`)) }}>
+                          {t('packs.remove')}
+                        </Button>
+                      )}
+                  </span>
+                </div>
+                {jobOf('pack', pack.id)}
+              </div>
+            ))}
+          </div>
+          {live.planned.map(pack => <p key={pack.id} style={styles.hint}>{fill(t('packs.planned'), { id: pack.id, accelerator: pack.accelerator })}</p>)}
+        </section>
+        <section style={styles.section}>
+          <h4 style={styles.heading}>{t('models.title')}</h4>
+          <div style={styles.card}>
+            {live.models.length === 0
+              ? <div style={styles.statusRow}><span style={styles.hint}>{t('models.none')}</span></div>
+              : live.models.map((model, index) => (
+                <div key={model.id} style={{ ...styles.statusRow, ...index === 0 ? {} : styles.divider }}>
+                  <span style={{ ...styles.statusLabel, flexShrink: 1, overflowWrap: 'anywhere' }}>{model.name}</span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                    <span style={styles.statusText}>{model.id} · {model.format === 'onnx-delivery' ? 'ONNX' : 'PyTorch'} · {mebibytes(model.bytes)}</span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={!idle}
+                      onClick={() => { act('remove', () => callPanel('POST', `models/remove?id=${encodeURIComponent(model.id)}`)) }}
+                    >
+                      {t('models.remove')}
+                    </Button>
+                  </span>
+                </div>
+              ))}
+          </div>
+          <div style={inline}>
+            <label htmlFor={modelSourceId} style={styles.hint}>{t('packs.source')}</label>
+            <select
+              id={modelSourceId}
+              style={styles.select}
+              value={modelSource}
+              onChange={(event) => { setModelSource(MODEL_SOURCES.find(value => value === event.target.value) ?? MODEL_SOURCES[0]) }}
+            >
+              {MODEL_SOURCES.map(value => <option key={value} value={value}>{t(`models.source.${value}` as Key)}</option>)}
+            </select>
+          </div>
+          <div style={styles.card}>
+            {live.catalog.map((model, index) => (
+              <div key={model.family} style={item(index)}>
+                <div style={between}>
+                  <span style={styles.optionTitle}>{model.name} · {model.parameters}</span>
+                  {model.sources.includes(modelSource)
+                    ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={!idle}
+                        onClick={() => { act('download', () => callPanel('POST', `models/download?family=${model.family}&source=${modelSource}`)) }}
+                      >
+                        {t('models.download')}
+                      </Button>
+                    )
+                    : <span style={styles.hint}>{t('models.notPublished')}</span>}
+                </div>
+                {jobOf('model-download', model.family)}
+              </div>
+            ))}
+          </div>
+          <label htmlFor={dirId} style={styles.hint}>{t('models.dir')}</label>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input
+              id={dirId}
+              style={{ ...styles.select, flex: 1, minWidth: 0 }}
+              value={dir}
+              placeholder={t('models.dir.placeholder')}
+              onChange={(event) => { setDir(event.target.value) }}
+            />
+            <Button variant="outline" size="sm" disabled={dir.trim() === '' || !idle} onClick={() => { act('dir', () => callPanel('POST', 'models/install-dir', { dir })) }}>
+              {t('models.dir.install')}
+            </Button>
+          </div>
+          {jobOf('model-directory')}
+        </section>
+        <section style={styles.section}>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ ...styles.section, gap: 6 }}>
+              <label htmlFor={packId} style={styles.hint}>{t('local.pack')}</label>
+              <select
+                id={packId}
+                style={styles.select}
+                value={text('localPack')}
+                disabled={disabled}
+                onChange={(event) => { edit('localPack', event.target.value === '' ? undefined : event.target.value) }}
+              >
+                <option value="">{t('local.pick')}</option>
+                {withSaved(live.packs.filter(pack => pack.installed !== null).map(pack => pack.id), text('localPack')).map(id => <option key={id} value={id}>{id}</option>)}
+              </select>
+            </div>
+            <div style={{ ...styles.section, gap: 6 }}>
+              <label htmlFor={modelId} style={styles.hint}>{t('local.model')}</label>
+              <select
+                id={modelId}
+                style={styles.select}
+                value={text('localModel')}
+                disabled={disabled}
+                onChange={(event) => { edit('localModel', event.target.value === '' ? undefined : event.target.value) }}
+              >
+                <option value="">{t('local.pick')}</option>
+                {withSaved(live.models.map(model => model.id), text('localModel')).map(id => (
+                  <option key={id} value={id}>{live.models.find(model => model.id === id)?.name ?? id}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          {needed !== undefined && chosenPack !== undefined && chosenPack.backend !== needed
+            ? <p style={{ ...styles.hint, color: 'var(--dsw-alias-state-warn-label)' }}>{fill(t('local.mismatch'), { backend: needed === 'onnx' ? 'ONNX' : 'PyTorch' })}</p>
+            : null}
+        </section>
+        <ErrorLine text={error} />
+      </>
+    )
+  }
+
+  function TestSection({ t }: { t: (key: Key) => string }) {
+    const { busy, error, act } = useAction()
+    const [sample, setSample] = useState<keyof typeof TEST_CALLS>('safe')
+    const [verdict, setVerdict] = useState<{ decision: string; elapsed_ms: number; backend: string; via: string } | undefined>(undefined)
+    return (
+      <section style={styles.section}>
+        <h4 style={styles.heading}>{t('test.title')}</h4>
+        <p style={styles.hint}>{t('test.hint')}</p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <select aria-label={t('test.title')} style={styles.select} value={sample} onChange={(event) => { setSample(event.target.value === 'risky' ? 'risky' : 'safe') }}>
+            <option value="safe">{t('test.safe')}</option>
+            <option value="risky">{t('test.risky')}</option>
+          </select>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy !== undefined}
+            onClick={() => {
+              setVerdict(undefined)
+              act('test', async () => { setVerdict(await callPanel('POST', 'test', TEST_CALLS[sample])) })
+            }}
+          >
+            {t(busy === undefined ? 'test.run' : 'test.running')}
+          </Button>
+        </div>
+        {verdict === undefined
+          ? null
+          : <p style={styles.optionTitle}>{fill(t('test.result'), { decision: verdict.decision, ms: verdict.elapsed_ms, backend: verdict.backend, via: verdict.via })}</p>}
+        <ErrorLine text={error === undefined ? undefined : t('test.failed') + error} />
+      </section>
+    )
+  }
+
   function SettingsPage({ view, t: translate }: ConfigPageProps) {
     const t = translate as (key: Key) => string
     const accepted = useSyncExternalStore(subscribeForm, formSnapshot)
     const [draft, setDraft] = useState<Partial<Record<Field, Staged>>>({})
     const [saving, setSaving] = useState(false)
     const [failed, setFailed] = useState(false)
-    const modelId = useId()
     const ruleId = useId()
     const timeoutId = useId()
     if (view === 'summary') return t('summary')
@@ -849,40 +1540,16 @@ export function apply(ctx: ClientContext): void {
               values={['local', 'cloud'] as const}
               current={backend}
               disabled={disabled}
-              unavailable={['cloud']}
               onChoose={(next) => { edit({ backend: next }) }}
               t={t}
             />
-            {backend === 'local'
-              ? (
-                <div style={styles.section}>
-                  <label htmlFor={modelId} style={styles.heading}>{t('model.title')}</label>
-                  <select
-                    id={modelId}
-                    style={styles.select}
-                    value={text('modelSize')}
-                    disabled={disabled}
-                    onChange={(event) => { edit({ modelSize: event.target.value === '' ? undefined : event.target.value }) }}
-                  >
-                    {MODEL_SIZES.map(size => (
-                      <option key={size} value={size}>{size === '' ? t('model.recommended') : size.toUpperCase()}</option>
-                    ))}
-                  </select>
-                  <p style={styles.hint}>{t('model.hint')}</p>
-                  <div style={{ ...styles.notice, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    <strong style={{ fontWeight: 500 }}>{t('install.title')}</strong>
-                    <span>{t('install.body')}</span>
-                    <code style={styles.command}>{HARDWARE_COMMAND}</code>
-                    <span>{t('install.download')}</span>
-                    <code style={styles.command}>{DOWNLOAD_COMMAND}</code>
-                    <span>{t('install.local')}</span>
-                    <code style={styles.command}>{INSTALL_COMMAND}</code>
-                    <span>{t('install.status')}</span>
-                    <code style={styles.command}>{STATUS_COMMAND}</code>
-                  </div>
-                </div>
-              )
-              : null}
+            <RuntimePanel
+              t={t}
+              backend={backend}
+              text={text}
+              disabled={disabled}
+              edit={(field, next) => { edit({ [field]: next }) }}
+            />
             <section style={styles.section}>
               <h4 style={styles.heading}>{t('options.title')}</h4>
               <p style={styles.hint}>{t('options.hint')}</p>
@@ -1028,13 +1695,6 @@ export function apply(ctx: ClientContext): void {
                     </span>
                   )
                   : null}
-              </div>
-            </section>
-            <section style={styles.section}>
-              <h4 style={styles.heading}>{t('account.title')}</h4>
-              <div style={{ ...styles.card, ...styles.statusRow, flexDirection: 'row', alignItems: 'center' }}>
-                <span style={styles.hint}>{t('account.none')}</span>
-                <Button variant="outline" size="sm" disabled>{t('account.signIn')}</Button>
               </div>
             </section>
           </div>

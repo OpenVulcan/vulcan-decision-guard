@@ -1,0 +1,47 @@
+{
+  "comment": "Input of scripts/lock_runtime.py. Each pack is one prebuilt Python plus official wheels; nothing is compiled. Regenerate the lock files after any change here.",
+  "python_release": "20261021",
+  "targets": {
+    "win-x64": { "pbs": "x86_64-pc-windows-msvc", "uv_platform": "x86_64-pc-windows-msvc" },
+    "linux-x64": { "pbs": "x86_64-unknown-linux-gnu", "uv_platform": "x86_64-manylinux_2_28" },
+    "linux-arm64": { "pbs": "aarch64-unknown-linux-gnu", "uv_platform": "aarch64-manylinux_2_28" },
+    "mac-arm64": { "pbs": "aarch64-apple-darwin", "uv_platform": "aarch64-apple-darwin", "macos": "14.0" }
+  },
+  "packs": {
+    "onnx-cpu": {
+      "backend": "onnx",
+      "device": "cpu",
+      "python": "3.12.15",
+      "targets": ["win-x64", "linux-x64", "linux-arm64", "mac-arm64"],
+      "requirements": ["onnxruntime==1.30.0", "tokenizers==0.23.2", "numpy==2.5.3"]
+    },
+    "onnx-cuda": {
+      "backend": "onnx",
+      "device": "cuda",
+      "python": "3.12.15",
+      "targets": ["win-x64", "linux-x64"],
+      "requires": { "nvidia_driver": "580.65", "compute_capability": "7.5" },
+      "requirements": ["onnxruntime-gpu[cuda,cudnn]==1.30.0", "tokenizers==0.23.2", "numpy==2.5.3"]
+    },
+    "torch-cpu": {
+      "backend": "torch",
+      "device": "cpu",
+      "python": "3.11.17",
+      "targets": ["win-x64", "linux-x64", "linux-arm64", "mac-arm64"],
+      "find_links": "https://download.pytorch.org/whl/torch/",
+      "requirements": ["torch==2.9.1+cpu", "transformers==5.17.0", "laya==0.3.22", "tokenizers==0.23.2", "safetensors==0.8.0", "numpy==2.2.5"],
+      "requirements_by_target": { "mac-arm64": ["torch==2.9.1"] },
+      "constraints": "torch-constraints.txt"
+    },
+    "torch-cu128": {
+      "backend": "torch",
+      "device": "cuda",
+      "python": "3.11.17",
+      "targets": ["win-x64", "linux-x64"],
+      "requires": { "nvidia_driver": "570.65", "compute_capability": "7.5" },
+      "find_links": "https://download.pytorch.org/whl/torch/",
+      "requirements": ["torch==2.9.1+cu128", "transformers==5.17.0", "laya==0.3.22", "tokenizers==0.23.2", "safetensors==0.8.0", "numpy==2.2.5"],
+      "constraints": "torch-constraints.txt"
+    }
+  }
+}

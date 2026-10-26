@@ -1,7 +1,12 @@
+import path from 'node:path'
+
 import type { Context, Volatile } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import { AUTO_PRESET } from '@deepseek-ai/dsh-permission-presets'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
+import type {} from '@deepseek-ai/dsh-client-connection'
+import type {} from '@deepseek-ai/dsh-credentials'
+import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-session'
@@ -9,13 +14,18 @@ import type {} from '@deepseek-ai/dsh-settings'
 import { RUN_CODE_NAME, type PreToolDecision, type ToolExecution } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-user-approval'
 import type {} from '@deepseek-ai/dsh-working-directory'
-import { DecisionClient, type DecisionOptions, type JudgeSettings } from '@openvulcan/vulcan-decision/client'
+import {
+  CLOUD_MODELS, DecisionEngine, DecisionHome, DOWNLOAD_SOURCES, PACK_IDS,
+  type DecisionOptions, type DownloadSource, type EngineSettings, type PackId,
+} from '@openvulcan/vulcan-decision'
 
 import { translateCall } from './calls.js'
 import { decide, stageOf, wantsReview, type FirstStage, type Outcome, type SecondStage, type Situation } from './decide.js'
 import { IntentStore, intentTool } from './intent.js'
 import { reviewCall } from './review.js'
+import { deviceInfo, DshCredentialStore, handle, Panel, ROUTE_PREFIX, ROUTES } from './panel.js'
 import { installUnattended } from './unattended.js'
+import { VERSION } from './version.js'
 
 export { PROJECTION_KEY, UNATTENDED_COMMAND, UNATTENDED_RECORD, type GuardSessionView } from './unattended.js'
 
@@ -31,11 +41,11 @@ export const inject = ['llm', 'permissionPresets', 'sessionProjections', 'sessio
  */
 export type Mode = 'auto-preset' | 'standalone'
 
-/** Where verdicts come from: the OpenVulcan cloud (not open yet), or the model on this machine. */
+/**
+ * Where verdicts come from: OpenVulcan's cloud endpoints (the default, needing only a sign-in), or
+ * a model on this machine run by an installed runtime pack.
+ */
 export type Backend = 'cloud' | 'local'
-
-/** Size of the local `vulcan-decision-shell` model. */
-export type ModelSize = '0.2b' | '0.4b' | '0.6b'
 
 /**
  * Which LLM reviews calls the decision model did not allow.
@@ -53,8 +63,16 @@ export type Review = 'session' | 'custom' | 'off'
 export interface Config {
   mode: Volatile<Mode>
   backend: Volatile<Backend>
-  /** Absent means the largest installed size this device suits. */
-  modelSize: Volatile<ModelSize | undefined>
+  /** Cloud model id. */
+  cloudModel: Volatile<string>
+  /** Endpoint id the user locked; absent uses the measured best one. */
+  cloudEndpoint: Volatile<string | undefined>
+  /** Installed runtime pack for the local backend. */
+  localPack: Volatile<PackId | undefined>
+  /** Installed model id for the local backend. */
+  localModel: Volatile<string | undefined>
+  /** Download host for runtime packs: the official hosts, or mirrors in China. */
+  downloadSource: Volatile<DownloadSource>
   review: Volatile<Review>
   reviewProvider: Volatile<string | undefined>
   reviewModel: Volatile<string | undefined>
@@ -78,11 +96,25 @@ export const Config = Schema.object({
     .description('auto-preset: appears as the Auto permission preset. standalone: judges every session on top of its preset.')
     .volatile(),
   backend: Schema.union(['cloud', 'local'] as const)
-    .default('local')
-    .description('local: the model runs on this machine. cloud: OpenVulcan judges calls; not available yet.')
+    .default('cloud')
+    .description('cloud: OpenVulcan judges calls after you sign in. local: an installed model runs on this machine.')
     .volatile(),
-  modelSize: Schema.union(['0.2b', '0.4b', '0.6b'] as const)
-    .description('Local model size; omitted means the largest installed size this device suits.')
+  cloudModel: Schema.union(CLOUD_MODELS)
+    .default(CLOUD_MODELS[0])
+    .description('Cloud decision model.')
+    .volatile(),
+  cloudEndpoint: Schema.string()
+    .description('Cloud endpoint id to always use; omitted uses the fastest measured one.')
+    .volatile(),
+  localPack: Schema.union(PACK_IDS)
+    .description('Runtime pack that runs the local model.')
+    .volatile(),
+  localModel: Schema.string()
+    .description('Installed local model id.')
+    .volatile(),
+  downloadSource: Schema.union(DOWNLOAD_SOURCES)
+    .default('official')
+    .description('Where runtime packs download from: official hosts, or cn mirrors.')
     .volatile(),
   review: Schema.union(['session', 'custom', 'off'] as const)
     .default('session')
@@ -168,7 +200,13 @@ export function apply(ctx: Context, config: Config): void {
   const sessions = ctx.sessions
   const llm = ctx.llm
   const tools = ctx.tools
-  const client = new DecisionClient()
+  const engine = new DecisionEngine({
+    home: new DecisionHome(path.join(resolveDshHome(), 'vulcan-decision')),
+    credentials: new DshCredentialStore(() => ctx.get('credentials')),
+    device: deviceInfo(VERSION),
+    // Tests point sign-in at a local stand-in, as with the command line.
+    ...process.env['VULCAN_DECISION_AUTH_ORIGIN'] === undefined ? {} : { authOrigin: process.env['VULCAN_DECISION_AUTH_ORIGIN'] },
+  })
   const intents = new IntentStore()
   const lifecycle = new AbortController()
   let accepting = true
@@ -198,6 +236,21 @@ export function apply(ctx: Context, config: Config): void {
     database_reset: config.databaseReset.get(),
     project_reset: config.projectReset.get(),
   })
+
+  const engineSettings = (): EngineSettings => {
+    const pack = config.localPack.get()
+    const model = config.localModel.get()
+    const endpoint = config.cloudEndpoint.get()
+    return {
+      backend: config.backend.get(),
+      cloudModel: config.cloudModel.get(),
+      ...endpoint === undefined || endpoint === '' ? {} : { cloudEndpoint: endpoint },
+      ...pack === undefined || model === undefined || model === '' ? {} : { local: { pack, model } },
+      options: options(),
+    }
+  }
+
+  const panel = new Panel(engine, { engine: engineSettings, downloadSource: () => config.downloadSource.get() })
 
   /**
    * The interface language the user chose in dsh's settings, or undefined when it follows the
@@ -232,20 +285,13 @@ export function apply(ctx: Context, config: Config): void {
     // The statement belongs to this call whatever happens to it.
     const intent = intents.take(agent.session.id, exec.name)
 
-    const decisionOptions = options()
-    const modelSize = config.modelSize.get()
-    const settings: JudgeSettings = {
-      backend: config.backend.get(),
-      ...modelSize === undefined ? {} : { model_size: modelSize },
-      options: decisionOptions,
-    }
-    const first: FirstStage = await client.judge({
-      host: 'dsh',
-      session_id: String(agent.session.id),
+    const settings = engineSettings()
+    const decisionOptions = settings.options
+    const first: FirstStage = await abortable(engine.judge({
       ...project === undefined ? {} : { project },
       tool: translation.tool,
       arguments: translation.arguments,
-    }, settings, signal).then(
+    }, settings), signal).then(
       verdict => ({ kind: 'verdict', verdict }),
       (error: unknown) => ({ kind: 'error', message: messageOf(error) }),
     )
@@ -408,6 +454,18 @@ export function apply(ctx: Context, config: Config): void {
     })
   }
 
+  // The settings panel's routes live inside dsh's authenticated connection, when there is one.
+  ctx.inject(['connection'], (child) => {
+    for (const [method, route, handler] of ROUTES) {
+      child.effect(() => child.connection.fetch.register({
+        path: `${ROUTE_PREFIX}${route}`,
+        methods: [method],
+        requestBody: 'buffered',
+        fetch: request => handle(panel, handler, request),
+      }))
+    }
+  })
+
   // This plugin ships its own settings page, so schema-generated pages are turned off.
   ctx.inject(['settings'], (child) => {
     child.effect(() => child.settings.configure({ auto: false }, ctx.fiber))
@@ -442,10 +500,13 @@ export function apply(ctx: Context, config: Config): void {
     claimAuto()
     syncIntentTool()
 
-    // Start the service now so the first tool call does not wait for it.
-    client.start().catch((error: unknown) => {
-      ctx.logger.warn(`decision service did not start: ${messageOf(error)}`)
-    })
+    // Load the local model now so the first tool call does not wait for it.
+    const warm = engineSettings()
+    if (warm.backend === 'local' && warm.local !== undefined) {
+      engine.local.warm(warm.local).catch((error: unknown) => {
+        ctx.logger.warn(`local decision model did not load: ${messageOf(error)}`)
+      })
+    }
 
     // Disposers start in reverse order, so this runs first.
     yield async () => {
@@ -455,7 +516,8 @@ export function apply(ctx: Context, config: Config): void {
         await releaseAuto()
       } finally {
         lifecycle.abort(new Error('vulcan-decision-guard integration disposed'))
-        client.close()
+        panel.close()
+        engine.stop()
       }
     }
   }, 'vulcan-decision-guard lifecycle')
@@ -469,6 +531,16 @@ function previewOf(args: unknown): string {
   const command = typeof args === 'object' && args !== null ? (args as Record<string, unknown>)['command'] : undefined
   const text = typeof command === 'string' ? command : JSON.stringify(args, null, 2) ?? ''
   return text.length <= MAX_PREVIEW_CHARS ? text : `${text.slice(0, MAX_PREVIEW_CHARS)}…`
+}
+
+/** Settle with `promise`, or reject as soon as `signal` aborts; the work itself is not stopped. */
+function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason as Error)
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason as Error)
+    signal.addEventListener('abort', abort, { once: true })
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort))
+  })
 }
 
 function denied(reason: string): PreToolDecision {

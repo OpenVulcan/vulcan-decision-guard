@@ -26,7 +26,7 @@
     "cordis.patch.yml"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && tsc -p tsconfig.client.json && node scripts/bundle-client.mjs",
+    "build": "node -e \"fs.rmSync('lib',{recursive:true,force:true})\" && tsc -p tsconfig.json && tsc -p tsconfig.client.json && node scripts/bundle-client.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "test": "tsc -p tsconfig.json && node --test \"lib/**/*.test.js\""
   },
@@ -56,7 +56,10 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.5",
     "@deepseek-ai/dsh-agent": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-connection": "^0.2.1-rc.2",
     "@deepseek-ai/dsh-commands": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-credentials": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-home-paths": "^0.2.1-rc.2",
     "@deepseek-ai/dsh-llm": "^0.2.1-rc.2",
     "@deepseek-ai/dsh-permission-presets": "^0.2.1-rc.2",
     "@deepseek-ai/dsh-session": "^0.2.1-rc.2",
@@ -71,7 +74,10 @@
     "@deepseek-ai/cordis": "4.0.5",
     "@deepseek-ai/cordis-plugin-loader": "1.0.6",
     "@deepseek-ai/dsh-agent": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-connection": "0.2.1-rc.2",
     "@deepseek-ai/dsh-commands": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-credentials": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-home-paths": "0.2.1-rc.2",
     "@deepseek-ai/dsh-llm": "0.2.1-rc.2",
     "@deepseek-ai/dsh-permission-presets": "0.2.1-rc.2",
     "@deepseek-ai/dsh-session": "0.2.1-rc.2",

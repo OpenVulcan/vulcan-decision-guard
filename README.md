@@ -3,56 +3,46 @@
 为 AI 编码工具提供的权限守卫插件。AI 代理每次调用工具前，先由 Vulcan Decision 模型判断这次调用：
 安全的直接放行，拿不准的交给复核 LLM 或由你确认，危险的拦截。
 
-> 状态：v1 预览版，目前只支持 DeepSeek harness（dsh `0.2.1-rc.2`）。模型下载已就绪但下载地址尚未发布，
-> 暂时从本地目录安装；OpenVulcan 云端判定尚未开放。设计与验证记录见 [docs/architecture.md](docs/architecture.md)。
+> 状态：v1 预览版，目前只支持 DeepSeek harness（dsh `0.2.1-rc.2`）。OpenVulcan 云端服务与本机模型的下载地址
+> 尚未发布，本机模型暂时从本地目录安装。设计与验证记录见 [docs/architecture.md](docs/architecture.md)。
 
 ## 组成
 
 | 包 | 作用 |
 | --- | --- |
-| [`@openvulcan/vulcan-decision`](packages/vulcan-decision) | 常驻判定服务与命令行：在本机用 ONNX Runtime 运行 `vulcan-decision-shell` 模型，所有宿主插件共用 |
-| [`@openvulcan/dsh-decision-guard`](packages/dsh-decision-guard) | dsh 插件：拦截工具调用、换算成模型的输入格式、执行判定结论，并提供设置页 |
+| [`@openvulcan/vulcan-decision`](packages/vulcan-decision) | 判定引擎（OpenVulcan 云端或本机模型）、账号、运行包与模型管理、命令行 |
+| [`@openvulcan/dsh-decision-guard`](packages/dsh-decision-guard) | dsh 插件：拦截工具调用、换算成模型的输入格式、执行判定结论，并提供设置面板 |
 
-两者都是纯 Node 包（Node ≥ 20.19），不需要 Rust、Python 或单独下载 ONNX Runtime：
-`onnxruntime-node` 自带 Windows、macOS 与 Linux 的 CPU 运行库（Windows 另带 DirectML），Linux x64 上
-的 CUDA 执行库由它的安装脚本下载。
+两者都是纯 Node 包（Node ≥ 20.19），没有原生依赖与安装脚本，合计约 110 KB。
 
-## 运行设备与模型格式
+## 云端与本机
 
-服务默认自动选择运行设备：Linux x64 上 CUDA 可用时用 CUDA，Windows 上有显卡时用 DirectML，其余用 CPU；
-环境变量 `VULCAN_DECISION_DEVICE=cpu|dml|cuda` 可指定设备，指定的设备不可用时直接报错，不改用其他设备。
-GPU 上推荐半精度权重（`fp16-mixed`），CPU 与计算能力低于 5.3 的旧 NVIDIA 显卡推荐全精度（`fp32`）；推荐尺寸
-取总内存与显存中较小的一档。`npx @openvulcan/vulcan-decision hardware` 列出本机显卡、各设备是否可用及缺少
-什么，以及推荐的尺寸与格式。
+默认安装只有云端判定：在插件设置页登录 OpenVulcan 账号（中国站或国际站）即可使用，本机不安装任何运行库。
+需要工具调用内容不出本机时，可在设置页切到“本机模型”，按需安装一个**运行包**：
 
-CUDA 需要：Linux x64、NVIDIA 驱动（`nvidia-smi` 可用）、允许 `onnxruntime-node` 的安装脚本（它下载 CUDA
-执行库），以及系统中的 CUDA 12 与 cuDNN 9（`libcudart.so.12`、`libcublas.so.12`、`libcublasLt.so.12`、
-`libcufft.so.11`、`libcurand.so.10`、`libcudnn.so.9`）。onnxruntime-node 在 Windows 上不提供 CUDA，
-NVIDIA 显卡在 Windows 上经 DirectML 运行。
+| 运行包 | 适用 | Windows x64 下载量 |
+| --- | --- | --- |
+| `onnx-cpu` | 任意电脑，运行 ONNX 模型 | 56 MiB |
+| `onnx-cuda` | NVIDIA 显卡（RTX 20 系列及以上），运行 ONNX 模型 | 1307 MiB |
+| `torch-cpu` | 任意电脑，运行 PyTorch 发布版模型 | 173 MiB |
+| `torch-cu128` | NVIDIA 显卡（RTX 20 系列及以上），运行 PyTorch 发布版模型 | 2797 MiB |
+
+运行包是预编译的 Python 与官方 wheel，每个文件按锁定的 SHA-256 校验；**不编译任何东西，也不安装或更新
+驱动**，CUDA 库来自 NVIDIA 官方 wheel，只要求显卡驱动版本足够。没有现成运行库的显卡（AMD、Intel、Apple）
+使用 CPU 运行包或云端。NPU（Intel、Qualcomm）运行包已预留，等待为 NPU 导出的模型发布。设置页会检测显卡、
+驱动与计算能力并给出建议。国内网络可选“国内镜像”下载源（npmmirror、阿里云）。
 
 ## 安装（dsh）
 
-1. 安装插件：
+```sh
+dsh plugin add @openvulcan/dsh-decision-guard
+```
 
-   ```sh
-   dsh plugin add @openvulcan/dsh-decision-guard
-   ```
+1. 在 dsh 的插件页打开本插件，登录 OpenVulcan；或切到“本机模型”，安装运行包与模型并选择它们。
+2. 在 dsh 权限选择器中选择“自动审查”，或在插件设置页把接入方式改为“独立开关”。
+3. 用设置页的“试判定”确认判定可用。
 
-   pnpm 会拦下 `onnxruntime-node` 的安装脚本，dsh 插件页随之提示“允许这些脚本并重试”。该脚本只在
-   Linux x64 上下载 CUDA 执行库，在 Windows 与 macOS 上什么也不做。Linux x64 上要用 NVIDIA 显卡就允许它；
-   不用 CUDA 时在 profile 的 `pnpm-workspace.yaml` 中写入 `allowBuilds: { onnxruntime-node: false }`
-   同样可以完成安装。
-
-2. 安装模型：
-
-   ```sh
-   npx @openvulcan/vulcan-decision hardware        # 查看推荐的设备、尺寸与格式
-   npx @openvulcan/vulcan-decision model download  # 下载推荐的模型（下载地址发布后可用）
-   npx @openvulcan/vulcan-decision model install <模型目录> --size 0.2b   # 或从本地目录安装
-   npx @openvulcan/vulcan-decision status
-   ```
-
-3. 在 dsh 权限选择器中选择“自动审查”，或在插件设置页把接入方式改为“独立开关”。
+也可以用命令行完成同样的操作：`npx @openvulcan/vulcan-decision --help`。
 
 ## 判定结论如何执行
 
@@ -77,20 +67,23 @@ NVIDIA 显卡在 Windows 上经 DirectML 运行。
 - **说明意图**：复核开启时，AI 可调用 `explain_tool_call` 说明下一次调用的目的。说明只交给复核 LLM 并显示在询问
   卡片上，不交给判定模型，也不能单独构成授权。每次被复核拒绝时，AI 都会收到理由并被提示可以先说明再重试。
 
-超过模型输入上限（由模型包的 `runtime-config.json` 规定，0.2B 预览版为 32768 个 token）的调用按 block 处理。任何错误都不会被当作放行。
+任何错误（未登录、网络失败、运行包或模型缺失）都不会被当作放行。
 
 ## 模型
 
-`vulcan-decision-shell`，规划 0.2B、0.4B、0.6B 三种尺寸，当前提供 0.2B v1 预览版。预览版的判定仍在校准，
-它是沙盒之上的一道防线，不能取代沙盒。
+`vulcan-decision-shell` v1 有三个系列：mini（0.2B，默认）、flash（0.35B）、standard（0.8B），云端与本机都可用。
+本机模型将发布在 Hugging Face、魔搭国际站与魔搭国内站。预览版的判定仍在校准，它是沙盒之上的一道防线，
+不能取代沙盒。
 
 ## 开发
 
 ```sh
 pnpm install
 pnpm -r run typecheck
-pnpm -r test
+pnpm test
 ```
+
+运行包锁文件由 `python -I -B scripts/lock_runtime.py` 生成（需要 uv）。
 
 ## 许可
 

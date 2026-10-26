@@ -1,7 +1,3 @@
 packages:
   - packages/*
 
-# The Windows and macOS binaries ship inside onnxruntime-node; its install script only fetches
-# optional Linux CUDA binaries, which the CPU runtime does not need.
-allowBuilds:
-  onnxruntime-node: false

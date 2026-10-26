@@ -1,335 +1,254 @@
 /**
- * The `vulcan-decision` command line: runs the resident service and manages installed models.
+ * The `vulcan-decision` command line: the account, runtime packs, models and test judgements.
  */
 
 import fs from 'node:fs'
+import os from 'node:os'
 import { parseArgs } from 'node:util'
 
-import { DecisionClient, exchange, ping } from './client.js'
-import { chooseDownload, downloadModel } from './model/download.js'
-import { detectHardware, recommendedPrecision, recommendedProvider, recommendedSizeFor, type ProviderState } from './model/hardware.js'
-import { listInstalled, installFromDirectory, removeInstalled, selectModel, type Precision } from './model/package.js'
-import { DEVICE_ENV, LoadedModel, requestedProvider, type ModelInput } from './model/runtime.js'
-import { messageOf } from './models.js'
-import { dataDir, endpointPath } from './paths.js'
-import { CONTRACT_VERSION, DecisionError, MODEL_SIZES, type DecisionOptions, type JudgeCall, type ModelSize } from './protocol.js'
-import { serve } from './service.js'
+import { FileCredentialStore, isSite, OpenVulcanAccount, type Site } from './cloud/account.js'
+import { CLOUD_MODELS, EdgeClient } from './cloud/edge.js'
+import { DOWNLOAD_SOURCES, type DownloadSource } from './download.js'
+import { DecisionEngine } from './engine.js'
+import { detectHardware, gpuGeneration, recommend } from './hardware.js'
+import { defaultHome, type DecisionHome } from './home.js'
+import { LocalEngine } from './local/engine.js'
+import { backendOf, downloadModel, installModelFromDirectory, listModels, MODEL_CATALOG, MODEL_FAMILIES, MODEL_SOURCES, removeModel, type ModelFamily, type ModelSource } from './local/models.js'
+import { installPack, installedPack, isPackId, PACK_IDS, PLANNED_PACKS, readLock, removePack, type PackId } from './local/packs.js'
+import { DEFAULT_OPTIONS, DecisionError, type JudgeInput } from './protocol.js'
 import { VERSION } from './version.js'
 
 const USAGE = `vulcan-decision ${VERSION}
 
 Usage:
-  vulcan-decision serve                       Run the resident service in the foreground
-  vulcan-decision start                       Start the service unless it is running
-  vulcan-decision status                      Show the running service and installed models
-  vulcan-decision stop                        Stop the running service
-  vulcan-decision hardware                    Show graphics cards, usable devices and the recommended model
-  vulcan-decision model list                  List installed models
-  vulcan-decision model download [--size <size>] [--precision <fp16-mixed|fp32>]
-                                              Download a published model; defaults to the recommendation
-  vulcan-decision model install <dir> --size <0.2b|0.4b|0.6b> [--id <id>]
-                                              Install a model package from a local directory
-  vulcan-decision model remove <id|size>      Remove an installed model
-  vulcan-decision judge --input <file>        Judge calls through the service (debugging)
-  vulcan-decision eval --input <file> [--size <size>]
-                                              Score rendered calls in this process (debugging)
+  vulcan-decision hardware                     Graphics cards, NPUs and the recommended runtime pack
+  vulcan-decision login [--site cn|global]     Sign in to OpenVulcan in the browser
+  vulcan-decision logout                       Sign out and revoke this device
+  vulcan-decision account                      Show the signed-in account
+  vulcan-decision cloud models                 Models this account may use
+  vulcan-decision cloud probe [--model <id>]   Measure the endpoints of a cloud model
+  vulcan-decision packs                        Runtime packs and whether they fit this machine
+  vulcan-decision packs install <pack> [--source official|cn]
+  vulcan-decision packs remove <pack>
+  vulcan-decision models                       Installed and published local models
+  vulcan-decision models install <dir>         Install a model package from a local directory
+  vulcan-decision models download <mini|flash|standard> --from <huggingface|modelscope-intl|modelscope-cn>
+  vulcan-decision models remove <id>
+  vulcan-decision judge --tool <name> --args <json> [--project <dir>] [--cloud <model> | --pack <pack> --model <id>]
+  vulcan-decision eval --input <file> --pack <pack> --model <id>
+                                               Judge {settings, rendered} records locally, printing JSON
 
-The data directory is ${dataDir()}; set VULCAN_DECISION_HOME to use another one.
-${DEVICE_ENV}=auto|cpu|dml|cuda chooses the device; auto takes the recommended one.`
-
-/** Default authorization options, matching the model's policy defaults. */
-const DEFAULT_OPTIONS: DecisionOptions = { cross_project_writes: 'allow', database_reset: 'confirm', project_reset: 'confirm' }
+The data directory is ${defaultHome().root}; set VULCAN_DECISION_HOME to use another one.`
 
 /** Run one command. @returns the process exit code. */
 export async function main(args: readonly string[]): Promise<number> {
   const [command, ...rest] = args
+  const home = defaultHome()
   try {
     switch (command) {
-      case 'serve':
-        return await runServe()
-      case 'start':
-        return await runStart()
-      case 'status':
-        return await runStatus()
-      case 'stop':
-        return await runStop()
       case 'hardware':
         return runHardware()
-      case 'model':
-        return await runModel(rest)
+      case 'login':
+        return await runLogin(home, rest)
+      case 'logout':
+        await account(home).signOut()
+        console.log('signed out')
+        return 0
+      case 'account':
+        console.log(JSON.stringify(await account(home).status(), null, 2))
+        return 0
+      case 'cloud':
+        return await runCloud(home, rest)
+      case 'packs':
+        return await runPacks(home, rest)
+      case 'models':
+        return await runModels(home, rest)
       case 'judge':
-        return await runJudge(rest)
+        return await runJudge(home, rest)
       case 'eval':
-        return await runEval(rest)
+        return await runEval(home, rest)
       case undefined:
       case 'help':
       case '--help':
       case '-h':
         console.log(USAGE)
-        return command === undefined ? 1 : 0
-      case '--version':
-        console.log(VERSION)
         return 0
       default:
         console.error(`unknown command ${command}\n\n${USAGE}`)
-        return 1
+        return 2
     }
   } catch (error) {
-    console.error(error instanceof DecisionError ? `${error.code}: ${error.message}` : messageOf(error))
+    console.error(error instanceof DecisionError ? `${error.code}: ${error.message}` : (error as Error).message)
     return 1
   }
 }
 
-async function runServe(): Promise<number> {
-  const handle = await serve()
-  if (handle === undefined) {
-    console.error(`another service already listens on ${endpointPath()}`)
-    return 1
-  }
-  const stop = (): void => { void handle.stop() }
-  process.once('SIGINT', stop)
-  process.once('SIGTERM', stop)
-  // The server keeps the event loop alive; `stop` exits the process.
-  await new Promise<never>(() => {})
-  return 0
+function account(home: DecisionHome): OpenVulcanAccount {
+  return new OpenVulcanAccount(new FileCredentialStore(home.file('account.json')), device(), process.env.VULCAN_DECISION_AUTH_ORIGIN)
 }
 
-async function runStart(): Promise<number> {
-  const client = new DecisionClient()
-  try {
-    console.log(`service listening on ${await client.start()}`)
-  } finally {
-    client.close()
-  }
-  return 0
-}
-
-async function runStatus(): Promise<number> {
-  const endpoint = endpointPath()
-  const signal = AbortSignal.timeout(5_000)
-  const pong = await ping(endpoint, signal).catch(() => undefined)
-  if (pong === undefined) {
-    console.log('service: not running')
-  } else if (pong.type === 'contract_mismatch') {
-    console.log(`service: running with contract ${pong.contract}; this command speaks ${CONTRACT_VERSION}`)
-  } else {
-    const answer = await exchange(endpoint, { type: 'status', contract: CONTRACT_VERSION }, signal)
-    if (answer.type !== 'status') throw new Error(`unexpected answer ${answer.type}`)
-    const { status } = answer
-    console.log(`service: running (version ${status.version}, pid ${status.pid}, up ${Math.round(status.uptime_ms / 1000)} s, judged ${status.judged})`)
-    for (const model of status.models.filter(item => item.loaded)) console.log(`loaded: ${model.id} on ${model.device ?? 'unknown device'}`)
-  }
-  printInstalled()
-  return 0
-}
-
-async function runStop(): Promise<number> {
-  console.log(await stopService() ? 'service stopped' : 'service: not running')
-  return 0
-}
-
-/** Stop a running service and wait until its endpoint is free. @returns whether one was running. */
-async function stopService(): Promise<boolean> {
-  const endpoint = endpointPath()
-  const signal = AbortSignal.timeout(15_000)
-  if (await ping(endpoint, signal).then(() => false, () => true)) return false
-  await exchange(endpoint, { type: 'shutdown' }, signal).catch(() => {})
-  while (await ping(endpoint, signal).then(() => true, () => false)) {
-    if (signal.aborted) throw new Error('the service did not stop in time')
-    await new Promise(resolve => setTimeout(resolve, 100))
-  }
-  return true
-}
-
-async function runModel(args: readonly string[]): Promise<number> {
-  const [action, ...rest] = args
-  switch (action) {
-    case 'list':
-      printInstalled()
-      return 0
-    case 'download': {
-      const { values } = parseArgs({ args: [...rest], options: { size: { type: 'string' }, precision: { type: 'string' } } })
-      const provider = requestedProvider()
-      const hardware = detectHardware()
-      const size = parseSize(values.size) ?? recommendedSizeFor(hardware, provider)
-      const precision = parsePrecision(values.precision) ?? recommendedPrecision(provider, hardware)
-      // An explicit choice is downloaded as asked; the recommendation settles for what is published.
-      const chosen = values.size !== undefined && values.precision !== undefined ? { size, precision } : chooseDownload(size, precision)
-      if (chosen === undefined) throw new Error(`no published model fits ${size}`)
-      console.log(`downloading the ${chosen.size} ${chosen.precision} model for ${provider}`)
-      const model = await downloadModel({
-        size: chosen.size,
-        precision: chosen.precision,
-        log: line => console.log(line),
-        // A running service holds the graphs open; it restarts on the next call.
-        beforeInstall: async () => { if (await stopService()) console.log('stopped the running service') },
-      })
-      console.log(`installed ${model.manifest.id} at ${model.root}`)
-      return 0
-    }
-    case 'install': {
-      const { values, positionals } = parseArgs({
-        args: [...rest],
-        options: { size: { type: 'string' }, id: { type: 'string' } },
-        allowPositionals: true,
-      })
-      const [source] = positionals
-      if (source === undefined || positionals.length !== 1) throw new Error('model install needs exactly one source directory')
-      const size = parseSize(values.size)
-      if (size === undefined) throw new Error('model install needs --size')
-      // A running service holds the graphs open; it restarts on the next call.
-      if (await stopService()) console.log('stopped the running service')
-      const model = await installFromDirectory(source, { size, ...values.id === undefined ? {} : { id: values.id }, log: line => console.log(line) })
-      console.log(`installed ${model.manifest.id} at ${model.root}`)
-      return 0
-    }
-    case 'remove': {
-      const [target] = rest
-      if (target === undefined || rest.length !== 1) throw new Error('model remove needs one model id or size')
-      if (await stopService()) console.log('stopped the running service')
-      if (!removeInstalled(target)) {
-        console.error(`no installed model matches ${target}`)
-        return 1
-      }
-      console.log(`removed ${target}`)
-      return 0
-    }
-    default:
-      throw new Error('model needs list, download, install or remove')
-  }
-}
-
-function printInstalled(): void {
-  const installed = listInstalled()
-  if (installed.length === 0) {
-    console.log('models: none installed')
-    return
-  }
-  console.log(`models (this device suits up to ${recommendedSizeFor(detectHardware(), requestedProvider())}):`)
-  for (const model of installed) {
-    const graphs = model.manifest.variants.map(variant => `${variant.precision} on ${variant.devices.join('/')}`).join(', ')
-    console.log(`  ${model.manifest.size}  ${model.manifest.id}  [${graphs}]`)
-  }
+function device() {
+  return { display_name: `Vulcan Decision CLI on ${os.hostname()}`, client_version: `vulcan-decision ${VERSION}` }
 }
 
 function runHardware(): number {
   const hardware = detectHardware()
-  console.log(`platform: ${hardware.platform} ${hardware.arch}, memory ${gib(hardware.totalMemory)}`)
-  if (hardware.gpus.length === 0) console.log('graphics cards: none found')
-  for (const gpu of hardware.gpus) {
-    const details = [
-      gpu.memoryBytes === undefined ? undefined : gib(gpu.memoryBytes),
-      gpu.computeCapability === undefined ? undefined : `compute ${gpu.computeCapability}`,
-      gpu.driver === undefined ? undefined : `driver ${gpu.driver}`,
-    ].filter(Boolean)
-    console.log(`graphics card: ${gpu.name}${details.length === 0 ? '' : ` (${details.join(', ')})`}`)
-  }
-  for (const state of hardware.providers) console.log(`  ${state.provider.padEnd(4)} ${describeProvider(state)}`)
-  const provider = requestedProvider()
-  const auto = recommendedProvider(hardware)
-  console.log(`device: ${provider}${provider === auto ? '' : ` (set by ${DEVICE_ENV}; recommended ${auto})`}`)
-  const size = recommendedSizeFor(hardware, provider)
-  const precision = recommendedPrecision(provider, hardware)
-  console.log(`recommended model: ${size} ${precision}`)
-  const published = chooseDownload(size, precision)
-  console.log(published === undefined
-    ? 'download: no published model fits'
-    : `download: ${published.size} ${published.precision}${published.download === null ? ' (address not published yet; use "model install")' : ' with "model download"'}`)
+  const recommendation = recommend(hardware)
+  const gpus = hardware.gpus.map(gpu => ({
+    ...gpu,
+    ...gpu.computeCapability === undefined ? {} : { generation: gpuGeneration(gpu.computeCapability) },
+  }))
+  console.log(JSON.stringify({ ...hardware, gpus, recommendation }, null, 2))
   return 0
 }
 
-/** Readiness of one device and, when it cannot run, what to do about it. */
-function describeProvider(state: ProviderState): string {
-  if (state.unavailable === undefined) return 'ready'
-  switch (state.unavailable) {
-    case 'unsupported_platform':
-      return state.provider === 'cuda'
-        ? 'unavailable: onnxruntime-node ships CUDA for Linux x64 only'
-        : 'unavailable: onnxruntime-node ships DirectML for Windows only'
-    case 'no_gpu':
-      return 'unavailable: no graphics card found'
-    case 'nvidia_driver':
-      return 'unavailable: nvidia-smi did not answer; install the NVIDIA driver'
-    case 'cuda_provider':
-      return 'unavailable: the onnxruntime-node CUDA provider is missing; allow its install script (pnpm approve-builds, or npm without --ignore-scripts) and reinstall'
-    case 'cuda_libraries':
-      return `unavailable: install CUDA 12 and cuDNN 9; missing ${state.missing?.join(', ') ?? ''}`
+async function runLogin(home: DecisionHome, args: readonly string[]): Promise<number> {
+  const { values } = parseArgs({ args: [...args], options: { site: { type: 'string', default: 'global' } } })
+  if (!isSite(values.site)) throw new Error('--site must be cn or global')
+  const pending = await account(home).signIn(values.site as Site)
+  console.log(`Open this page to approve the sign-in:\n${pending.approvalUrl}`)
+  const status = await pending.done
+  console.log(`signed in to ${status.site}, valid until ${status.expiresAt}`)
+  return 0
+}
+
+async function runCloud(home: DecisionHome, args: readonly string[]): Promise<number> {
+  const [sub, ...rest] = args
+  const edge = new EdgeClient(account(home))
+  if (sub === 'models') {
+    console.log((await edge.models()).join('\n'))
+    return 0
   }
+  if (sub === 'probe') {
+    const { values } = parseArgs({ args: rest, options: { model: { type: 'string', default: CLOUD_MODELS[0] } } })
+    const status = await edge.probe(values.model!)
+    console.log(JSON.stringify({ ...status, endpoints: status.endpoints.map(endpoint => ({ ...endpoint })) }, null, 2))
+    return 0
+  }
+  throw new Error('usage: cloud models | cloud probe [--model <id>]')
 }
 
-function gib(bytes: number): string {
-  return `${(bytes / 1024 ** 3).toFixed(1)} GiB`
-}
-
-/** Input of `judge`: one call or a list, each optionally carrying options and a size. */
-interface JudgeInput {
-  readonly project?: string
-  readonly tool: string
-  readonly arguments: Record<string, unknown>
-  readonly options?: Partial<DecisionOptions>
-  readonly model_size?: ModelSize
-}
-
-async function runJudge(args: readonly string[]): Promise<number> {
-  const { values } = parseArgs({ args: [...args], options: { input: { type: 'string' } } })
-  if (values.input === undefined) throw new Error('judge needs --input')
-  const inputs = asList(JSON.parse(fs.readFileSync(values.input, 'utf8')) as JudgeInput | JudgeInput[])
-  const client = new DecisionClient()
-  try {
-    for (const input of inputs) {
-      const call: JudgeCall = {
-        host: 'dsh',
-        ...input.project === undefined ? {} : { project: input.project },
-        tool: input.tool,
-        arguments: input.arguments,
-      }
-      const verdict = await client.judge(call, {
-        backend: 'local',
-        ...input.model_size === undefined ? {} : { model_size: input.model_size },
-        options: { ...DEFAULT_OPTIONS, ...input.options },
-      }, AbortSignal.timeout(120_000))
-      console.log(JSON.stringify(verdict))
+async function runPacks(home: DecisionHome, args: readonly string[]): Promise<number> {
+  const [sub, id, ...rest] = args
+  if (sub === undefined) {
+    const recommendation = recommend(detectHardware())
+    for (const pack of PACK_IDS) {
+      const fit = recommendation.packs.find(item => item.pack === pack)!
+      const installed = installedPack(home, pack)
+      const state = installed === undefined ? 'not installed' : installed.lock === readLock(pack).id ? 'installed' : 'installed, outdated'
+      const size = fit.bytes === undefined ? '' : `${(fit.bytes / 1024 ** 2).toFixed(0)} MiB`
+      console.log(`${pack.padEnd(12)} ${fit.fit.padEnd(16)} ${size.padStart(9)}  ${state}`)
     }
-  } finally {
-    client.close()
+    for (const planned of PLANNED_PACKS) console.log(`${planned.id.padEnd(12)} planned          (${planned.accelerator}: waiting for an NPU model release)`)
+    return 0
   }
-  return 0
+  if (!isPackId(id)) throw new Error(`unknown pack ${String(id)}; known: ${PACK_IDS.join(', ')}`)
+  if (sub === 'install') {
+    const { values } = parseArgs({ args: rest, options: { source: { type: 'string', default: 'official' } } })
+    if (!(DOWNLOAD_SOURCES as readonly string[]).includes(values.source!)) throw new Error('--source must be official or cn')
+    let lastPercent = -1
+    const record = await installPack(home, id as PackId, {
+      source: values.source as DownloadSource,
+      onProgress: progress => {
+        if (progress.phase !== 'download') {
+          console.error(progress.phase)
+          return
+        }
+        const percent = Math.floor((progress.done / progress.total) * 100)
+        if (percent !== lastPercent && percent % 5 === 0) console.error(`download ${percent}% (${progress.file})`)
+        lastPercent = percent
+      },
+    })
+    console.log(JSON.stringify(record, null, 2))
+    return 0
+  }
+  if (sub === 'remove') {
+    console.log(removePack(home, id as PackId) ? `removed ${id}` : `${id} was not installed`)
+    return 0
+  }
+  throw new Error('usage: packs [install <pack> | remove <pack>]')
 }
 
-/** Input of `eval`: the delivery package's `example-input.json` shape. */
-interface EvalInput {
-  readonly settings: DecisionOptions
-  readonly rendered: string
+async function runModels(home: DecisionHome, args: readonly string[]): Promise<number> {
+  const [sub, target, ...rest] = args
+  const progress = (done: number, total: number, file: string) => {
+    if (file !== '') console.error(`${total === 0 ? 100 : Math.floor((done / total) * 100)}% ${file}`)
+  }
+  if (sub === undefined) {
+    for (const model of listModels(home)) console.log(`installed  ${model.id}  ${model.package_format}  ${(model.bytes / 1024 ** 2).toFixed(0)} MiB`)
+    for (const model of MODEL_CATALOG) {
+      const sources = MODEL_SOURCES.filter(source => model.sources[source] !== null)
+      console.log(`published  ${model.family} (${model.name}, ${model.parameters})  ${sources.length === 0 ? 'no download address yet' : sources.join(', ')}`)
+    }
+    return 0
+  }
+  if (sub === 'install' && target !== undefined) {
+    const model = await installModelFromDirectory(home, target, { onProgress: progress })
+    console.log(`installed ${model.id} (${model.package_format})`)
+    return 0
+  }
+  if (sub === 'download' && target !== undefined) {
+    const { values } = parseArgs({ args: rest, options: { from: { type: 'string' } } })
+    if (!(MODEL_FAMILIES as readonly string[]).includes(target)) throw new Error(`unknown model ${target}; known: ${MODEL_FAMILIES.join(', ')}`)
+    if (!(MODEL_SOURCES as readonly (string | undefined)[]).includes(values.from)) throw new Error(`--from must be one of ${MODEL_SOURCES.join(', ')}`)
+    const model = await downloadModel(home, target as ModelFamily, values.from as ModelSource, { onProgress: progress })
+    console.log(`installed ${model.id}`)
+    return 0
+  }
+  if (sub === 'remove' && target !== undefined) {
+    console.log(removeModel(home, target) ? `removed ${target}` : `${target} was not installed`)
+    return 0
+  }
+  throw new Error('usage: models [install <dir> | download <family> --from <source> | remove <id>]')
 }
 
-async function runEval(args: readonly string[]): Promise<number> {
-  const { values } = parseArgs({ args: [...args], options: { input: { type: 'string' }, size: { type: 'string' } } })
-  if (values.input === undefined) throw new Error('eval needs --input')
-  const inputs = asList(JSON.parse(fs.readFileSync(values.input, 'utf8')) as EvalInput | EvalInput[])
-  const model = await LoadedModel.load(selectModel(parseSize(values.size)))
+async function runJudge(home: DecisionHome, args: readonly string[]): Promise<number> {
+  const { values } = parseArgs({
+    args: [...args],
+    options: {
+      tool: { type: 'string' }, args: { type: 'string', default: '{}' }, project: { type: 'string' },
+      cloud: { type: 'string' }, pack: { type: 'string' }, model: { type: 'string' },
+    },
+  })
+  if (values.tool === undefined) throw new Error('--tool is required')
+  const engine = new DecisionEngine({
+    home, credentials: new FileCredentialStore(home.file('account.json')), device: device(),
+    ...process.env.VULCAN_DECISION_AUTH_ORIGIN === undefined ? {} : { authOrigin: process.env.VULCAN_DECISION_AUTH_ORIGIN },
+  })
+  try {
+    const local = values.pack === undefined ? undefined : { pack: packArgument(values.pack), model: values.model ?? '' }
+    const verdict = await engine.judge(
+      { tool: values.tool, arguments: JSON.parse(values.args!) as Record<string, unknown>, ...values.project === undefined ? {} : { project: values.project } },
+      { backend: local === undefined ? 'cloud' : 'local', cloudModel: values.cloud ?? CLOUD_MODELS[0], ...local === undefined ? {} : { local }, options: DEFAULT_OPTIONS },
+    )
+    console.log(JSON.stringify(verdict, null, 2))
+    return 0
+  } finally {
+    engine.stop()
+  }
+}
+
+async function runEval(home: DecisionHome, args: readonly string[]): Promise<number> {
+  const { values } = parseArgs({ args: [...args], options: { input: { type: 'string' }, pack: { type: 'string' }, model: { type: 'string' } } })
+  if (values.input === undefined || values.pack === undefined || values.model === undefined) throw new Error('--input, --pack and --model are required')
+  const inputs = JSON.parse(fs.readFileSync(values.input, 'utf8')) as JudgeInput[]
+  const model = listModels(home).find(item => item.id === values.model)
+  const pack = packArgument(values.pack)
+  if (model !== undefined && backendOf(model.package_format) !== readLock(pack).backend) throw new Error(`${model.id} does not run on ${pack}`)
+  const engine = new LocalEngine(home)
   try {
     const started = performance.now()
-    const verdicts = await model.predict(inputs.map((input): ModelInput => ({ options: input.settings, rendered: input.rendered })))
-    for (const verdict of verdicts) console.log(JSON.stringify(verdict))
-    console.error(`${model.model.manifest.id} on ${model.provider}: ${inputs.length} calls in ${Math.round(performance.now() - started)} ms`)
+    const loaded = await engine.warm({ pack, model: values.model })
+    const loadedAt = performance.now()
+    const results = await engine.judge({ pack, model: values.model }, inputs)
+    console.log(JSON.stringify({ loaded, load_ms: Math.round(loadedAt - started), judge_ms: Math.round(performance.now() - loadedAt), results }, null, 2))
+    return 0
   } finally {
-    await model.release()
+    engine.stop()
   }
-  return 0
 }
 
-function parseSize(value: string | undefined): ModelSize | undefined {
-  if (value === undefined) return undefined
-  if (!(MODEL_SIZES as readonly string[]).includes(value)) throw new Error(`size must be one of ${MODEL_SIZES.join(', ')}`)
-  return value as ModelSize
-}
-
-function parsePrecision(value: string | undefined): Precision | undefined {
-  if (value === undefined) return undefined
-  if (value !== 'fp16-mixed' && value !== 'fp32') throw new Error('precision must be fp16-mixed or fp32')
+function packArgument(value: string): PackId {
+  if (!isPackId(value)) throw new Error(`unknown pack ${value}; known: ${PACK_IDS.join(', ')}`)
   return value
-}
-
-function asList<T>(value: T | T[]): T[] {
-  return Array.isArray(value) ? value : [value]
 }

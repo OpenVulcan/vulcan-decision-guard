@@ -1,18 +1,16 @@
 # @openvulcan/dsh-decision-guard
 
-DeepSeek harness（dsh）的 Vulcan Decision 权限守卫插件：每次工具调用执行前，由本机的
-`vulcan-decision-shell` 模型判定，模型未放行的调用可先交复核 LLM（会话模型或指定模型）按你写的规则复核，
-再询问你或拒绝；无人值守的会话从不询问。
-它替代 dsh 自带的实验插件 Auto review，两者不能同时启用。
+DeepSeek harness（dsh）的 Vulcan Decision 权限守卫插件：每次工具调用执行前，由 `vulcan-decision-shell` 模型
+判定（默认 OpenVulcan 云端，可选本机），模型未放行的调用可先交复核 LLM（会话模型或指定模型）按你写的规则
+复核，再询问你或拒绝；无人值守的会话从不询问。它替代 dsh 自带的实验插件 Auto review，两者不能同时启用。
 
 ```sh
 dsh plugin add @openvulcan/dsh-decision-guard
-npx @openvulcan/vulcan-decision hardware
-npx @openvulcan/vulcan-decision model download   # 下载地址发布后可用
-npx @openvulcan/vulcan-decision model install <模型目录> --size 0.2b
 ```
 
-安装后在权限选择器中选择“自动审查”，或在插件设置页把接入方式改为“独立开关”。安装时 dsh 会提示是否允许
-`onnxruntime-node` 的安装脚本，说明见仓库 [README](https://github.com/OpenVulcan/vulcan-decision-guard#readme)。
+安装后在 dsh 插件页打开本插件的设置面板：登录 OpenVulcan 账号即可使用云端判定；需要本机判定时切到“本机
+模型”，按硬件建议一键安装运行包与模型。登录凭据保存在 dsh 的凭据存储中，运行包与模型保存在
+`$DSH_HOME/vulcan-decision/`。然后在权限选择器中选择“自动审查”，或把接入方式改为“独立开关”。说明见仓库
+[README](https://github.com/OpenVulcan/vulcan-decision-guard#readme)。
 
 许可：MIT

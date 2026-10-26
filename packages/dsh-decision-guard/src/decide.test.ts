@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import type { Decision, Verdict } from '@openvulcan/vulcan-decision/client'
+import type { Decision, Verdict } from '@openvulcan/vulcan-decision'
 
 import { decide, INTENT_TOOL, stageOf, wantsReview, type FirstStage, type SecondStage, type Situation } from './decide.js'
 
 function verdict(decision: Decision, extra: Partial<Verdict> = {}): FirstStage {
-  return { kind: 'verdict', verdict: { decision, model: 'test', ...extra } }
+  return { kind: 'verdict', verdict: { decision, model_evaluated: true, backend: 'local', model: 'test', via: 'onnx-cpu', elapsed_ms: 1, ...extra } }
 }
 
 const FAILED: FirstStage = { kind: 'error', message: 'model_not_installed' }

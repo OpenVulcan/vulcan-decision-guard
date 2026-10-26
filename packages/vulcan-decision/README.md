@@ -1,23 +1,23 @@
 # @openvulcan/vulcan-decision
 
-Vulcan Decision 的常驻判定服务与命令行。它在本机用 ONNX Runtime 运行 `vulcan-decision-shell` 模型，
-判断 AI 编码工具的一次工具调用应当放行（allow）、确认（review）还是拦截（block），供各宿主插件共用。
+Vulcan Decision 的判定引擎与命令行。它判断 AI 编码工具的一次工具调用应当放行（allow）、确认（review）还是
+拦截（block），供各宿主插件共用。判定默认走 OpenVulcan 云端节点；也可以按需安装本机运行包，在本机运行
+`vulcan-decision-shell` 模型。本包没有原生依赖与安装脚本。
 
 ```sh
-npx @openvulcan/vulcan-decision hardware
-npx @openvulcan/vulcan-decision model download
-npx @openvulcan/vulcan-decision model install <模型目录> --size 0.2b
-npx @openvulcan/vulcan-decision status
-npx @openvulcan/vulcan-decision stop
+npx @openvulcan/vulcan-decision login --site cn          # 或 global
+npx @openvulcan/vulcan-decision cloud probe
+npx @openvulcan/vulcan-decision judge --tool shell_command --args '{"command":"git status"}'
+
+npx @openvulcan/vulcan-decision hardware                 # 显卡、NPU 与推荐的运行包
+npx @openvulcan/vulcan-decision packs install torch-cu128 --source cn
+npx @openvulcan/vulcan-decision models install <模型目录>
+npx @openvulcan/vulcan-decision judge --tool shell_command --args '{"command":"git status"}' --pack torch-cu128 --model <模型 id>
 ```
 
-`hardware` 列出本机显卡、CUDA / DirectML / CPU 是否可用（CUDA 还需 Linux x64、CUDA 12 与 cuDNN 9），
-以及推荐的模型尺寸与格式；`model download` 默认下载推荐的模型，逐个文件按固定的清单摘要校验，中断后可续传。
-下载地址尚未发布，目前用 `model install` 从本地目录安装。运行设备默认自动选择，可用
-`VULCAN_DECISION_DEVICE=cpu|dml|cuda` 指定。
-
-数据目录默认为 `~/.vulcan-decision`，可用 `VULCAN_DECISION_HOME` 改到别处。宿主插件通过 `/client` 入口的
-`DecisionClient` 连接服务，服务不存在时自动拉起。协议、模型包格式与验证记录见仓库的
+运行包（`onnx-cpu`、`onnx-cuda`、`torch-cpu`、`torch-cu128`）是预编译的 Python 与官方 wheel，按锁定的 SHA-256
+校验，不编译任何东西，也不安装驱动。数据目录默认为 `~/.vulcan-decision`，可用 `VULCAN_DECISION_HOME` 改到别处；
+宿主插件使用自己的目录与凭据存储。设计与验证记录见仓库的
 [docs/architecture.md](https://github.com/OpenVulcan/vulcan-decision-guard/blob/main/docs/architecture.md)。
 
 许可：MIT

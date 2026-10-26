@@ -4,7 +4,7 @@
  * the LLM review or the user allowing it.
  */
 
-import type { Verdict } from '@openvulcan/vulcan-decision/client'
+import type { Verdict } from '@openvulcan/vulcan-decision'
 
 /** The decision model's answer, or why there is none. */
 export type FirstStage =

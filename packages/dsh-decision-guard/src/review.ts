@@ -7,7 +7,7 @@
  */
 
 import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
-import type { DecisionOptions } from '@openvulcan/vulcan-decision/client'
+import type { DecisionOptions } from '@openvulcan/vulcan-decision'
 
 import type { SecondStage, Stage } from './decide.js'
 
