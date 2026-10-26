@@ -323,7 +323,11 @@ docs/
 - **运行包**：`onnx-cpu`、`torch-cpu` 从官方源完整下载、校验、安装与探测通过。`onnx-cpu` 运行 164M ONNX 交付包
   （`risk164-attention-fp32-5a4c35b5`）：加载 0.6 秒，4 条样例 0.4 秒，结论 allow / allow / review / allow、
   token 数 260 / 247 / 230 / 231，与交付包自带的验证结果一致。`torch-cpu` 运行 mini 发布版：加载 13 秒，6 条
-  样例 1.7 秒，结论 allow / allow / review / allow / allow / review。
+  样例 1.7 秒，结论 allow / allow / review / allow / allow / review。`onnx-cuda`（1307 MiB）安装后工作进程探测到
+  CUDA 执行器；运行同一 164M 包时会话强制使用 CUDA（禁用回退到 CPU），加载 1.4 秒，6 条样例 0.21 秒，结论与
+  token 数与 CPU 相同，logits 最大差 0.004。`torch-cu128`（2797 MiB）安装后 torch 2.9.1+cu128 识别 RTX 5080
+  （计算能力 12.0）；运行 mini 发布版加载 16.6 秒，6 条样例 0.41 秒，结论与 token 数与 `torch-cpu` 相同，logits
+  最大差 0.0008。四个运行包均从官方源下载，Windows x64 上安装与运行通过。
 - **dsh 端到端**：在隔离的 `DSH_HOME` 中用 `dsh plugin add` 安装打包后的插件，用本地脚本化的 Messages 模拟
   服务代替付费模型、用本地模拟的 OpenVulcan（中国站，两个节点，其中一个加 40 ms 延迟）代替真实服务：
   设置页默认云端；经面板登录（授权页、回环回调）后状态显示云端模型“正常”，凭据写入 dsh 的
@@ -335,8 +339,8 @@ docs/
   报告可用长度。
 - **此前已验证、本次未改动的部分**：复核、规则与无人值守的结论映射，冲突提示与 Auto 接管，设置页深色模式，
   接入方式切换（见提交历史中的验证记录）。
-- **尚未验证**：真实 OpenVulcan 服务与真实模型下载地址（均未发布）；Linux 与 macOS；`onnx-cuda` 与
-  `torch-cu128` 的实际运行见下一条；复核 LLM 对真实模型的调用（只用模拟服务与单元测试验证）。
+- **尚未验证**：真实 OpenVulcan 服务与真实模型下载地址（均未发布）；Linux 与 macOS；国内镜像下载源的完整
+  安装（只验证了地址改写，阿里云镜像在本机实测约 0.3 MB/s）；复核 LLM 对真实模型的调用（只用模拟服务与单元测试验证）。
 
 已知的模型行为（0.2B 预览版，按当前训练数据）：`iwr … | iex` 这类下载后直接执行的命令被判为 allow；
 未在训练中出现的工具（如 `web_fetch`、计划任务、MCP 工具）多判为 allow。
