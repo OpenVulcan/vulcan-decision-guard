@@ -11,9 +11,9 @@
 | 包 | 作用 |
 | --- | --- |
 | [`@openvulcan/vulcan-decision`](packages/vulcan-decision) | 判定引擎（OpenVulcan 云端或本机模型）、账号、运行包与模型管理、命令行 |
-| [`@openvulcan/dsh-decision-guard`](packages/dsh-decision-guard) | dsh 插件：拦截工具调用、换算成模型的输入格式、执行判定结论，并提供设置面板 |
+| [`@openvulcan/dsh-decision-guard`](packages/dsh-decision-guard) | dsh 插件：拦截工具调用、换算成模型的输入格式、执行判定结论，并提供设置面板；发布时内含判定引擎 |
 
-两者都是纯 Node 包（Node ≥ 20.19），没有原生依赖与安装脚本，合计约 110 KB。
+两者都是纯 Node 包（Node ≥ 20.19），没有原生依赖与安装脚本。dsh 用户只安装插件这一个包（约 110 KB）。
 
 ## 云端与本机
 
@@ -37,6 +37,9 @@
 ```sh
 dsh plugin add @openvulcan/dsh-decision-guard
 ```
+
+只需安装这一个包：判定引擎已打包在插件里。npm 发布之前，可在本仓库执行 `pnpm install && pnpm run pack:dsh`，
+再用 `dsh plugin add <仓库>/dist/openvulcan-dsh-decision-guard-0.1.0.tgz` 安装同一个包。
 
 1. 在 dsh 的插件页打开本插件，登录 OpenVulcan；或切到“本机模型”，安装运行包与模型并选择它们。
 2. 在 dsh 权限选择器中选择“自动审查”，或在插件设置页把接入方式改为“独立开关”。

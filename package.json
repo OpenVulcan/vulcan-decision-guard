@@ -6,6 +6,7 @@
   "scripts": {
     "build": "pnpm -r run build",
     "typecheck": "pnpm -r run typecheck",
-    "test": "pnpm -r run test"
+    "test": "pnpm -r run test",
+    "pack:dsh": "pnpm -r run build && node scripts/pack-dsh-plugin.mjs"
   }
 }

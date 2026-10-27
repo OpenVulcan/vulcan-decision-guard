@@ -303,9 +303,13 @@ docs/
 
 ## 九、发布与安装
 
-1. 先发布 `@openvulcan/vulcan-decision`，再发布 `@openvulcan/dsh-decision-guard`（插件以 `workspace:*`
-   引用前者，发布时由 pnpm 换成实际版本）。两者都没有安装脚本，dsh 不会弹出“允许脚本”提示。
-2. 用户执行 `dsh plugin add @openvulcan/dsh-decision-guard`，在插件设置页登录 OpenVulcan 即可使用云端判定。
+1. **dsh 插件是单个自包含的包。** `pnpm run pack:dsh` 构建两个包后由 `scripts/pack-dsh-plugin.mjs` 生成
+   `dist/openvulcan-dsh-decision-guard-<版本>.tgz`：判定引擎以 `bundleDependencies` 打进插件自己的
+   `node_modules/`，安装时不再到任何 registry 查找引擎。发布插件时发布这个 tgz（`npm publish <tgz>`），不要在
+   `packages/dsh-decision-guard` 里直接 `pnpm publish`，否则引擎会变成外部依赖。`@openvulcan/vulcan-decision`
+   另行发布，只供命令行与日后的其他宿主使用。两个包都没有安装脚本，dsh 不会弹出“允许脚本”提示。
+2. 用户执行 `dsh plugin add @openvulcan/dsh-decision-guard`（发布前可直接 `dsh plugin add <tgz 路径>`），只装这一个
+   包；在插件设置页登录 OpenVulcan 即可使用云端判定。
 3. 需要本机判定时，在设置页切到“本机模型”，按硬件建议安装运行包，再下载模型（地址发布后）或从本地目录
    安装，最后选择运行包与模型并保存。
 
@@ -335,6 +339,9 @@ docs/
   复核 LLM）；`DROP DATABASE` 判为 review，复核 LLM 答 review 后显示本插件的询问卡片（含 LLM 理由），拒绝后
   模型收到“未执行”。切到本机后经面板下载安装 `onnx-cpu`（进度、阶段、单任务锁定）、从目录安装 164M 模型，
   试判定 `git status` allow（首次 881 ms，含加载）、`DROP DATABASE` review（190 ms）。
+- **单包安装**（2026-10-27）：`pack:dsh` 生成的 110 KiB tgz 在全新的隔离 `DSH_HOME` 中经 `dsh plugin add` 安装，
+  pnpm 只新增这一个包、不需要任何 `overrides`；dsh 启动后插件加载，面板 `state` 从内置引擎读出四个运行包、
+  NPU 规划项与模型目录。
 - **Windows 路径长度**：数据目录较深时 torch 运行包的 pip 安装因路径超过 259 字符失败，已改为安装前检查并
   报告可用长度。
 - **此前已验证、本次未改动的部分**：复核、规则与无人值守的结论映射，冲突提示与 Auto 接管，设置页深色模式，
