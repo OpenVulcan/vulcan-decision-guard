@@ -11,11 +11,11 @@ import os from 'node:os'
 
 import { credentialKey, type CredentialRecord } from '@deepseek-ai/dsh-credentials'
 import {
-  CLOUD_MODELS, DecisionEngine, DecisionError, DOWNLOAD_SOURCES, MODEL_CATALOG, MODEL_FAMILIES, MODEL_SOURCES, PACK_IDS, PLANNED_PACKS,
+  DecisionEngine, DecisionError, DOWNLOAD_SOURCES, MODEL_CATALOG, MODEL_FAMILIES, MODEL_SOURCES, PACK_IDS, PLANNED_PACKS,
   detectHardware, gpuGeneration, installModelFromDirectory, installPack, installedPack, isPackId, isSite, listModels, parseCredential,
   readLock, recommend, removeModel, removePack, downloadModel,
   type Credential, type CredentialStore, type DecisionHome, type DownloadSource, type EngineSettings, type ModelFamily, type ModelSource,
-  type PendingSignIn, type Verdict,
+  type EndpointSnapshot, type PendingSignIn, type TestInput, type TestResult, type Verdict,
 } from '@openvulcan/vulcan-decision'
 
 /** Prefix of every panel route, below dsh's `/api`. Also restated in `client/index.tsx`. */
@@ -97,7 +97,7 @@ export class Panel {
       account: await this.engine.account.status(),
       signIn: this.signIn === undefined ? null : { approvalUrl: this.signIn.approvalUrl, expiresAt: this.signIn.expiresAt },
       ...this.signInError === undefined ? {} : { signInError: this.signInError },
-      cloud: { ...this.engine.cloud.status(settings.cloudEndpoint), models: CLOUD_MODELS },
+      cloud: this.engine.cloud.snapshot(settings.cloudModel === '' ? undefined : settings.cloudModel, settings.cloudEndpoint),
       hardware: {
         ...hardware,
         gpus: hardware.gpus.map(gpu => ({
@@ -163,13 +163,49 @@ export class Panel {
     }
   }
 
-  async probe(model: string | null) {
-    const settings = this.settings.engine()
-    return await this.engine.cloud.probe(model ?? settings.cloudModel, settings.cloudEndpoint)
-  }
-
+  /** The models OpenVulcan lists for this account; the first is the default. */
   async cloudModels(): Promise<string[]> {
     return await this.engine.cloud.models()
+  }
+
+  /** The endpoint table of the saved (or default) model, without measuring. */
+  async endpoints(): Promise<EndpointSnapshot> {
+    const settings = this.settings.engine()
+    if (!(await this.engine.account.status()).signedIn) return { mode: 'auto', endpoints: [] }
+    let model: string
+    try {
+      model = await this.engine.cloud.resolveModel(settings.cloudModel)
+    } catch (error) {
+      return { mode: 'auto', error: messageOf(error), endpoints: [] }
+    }
+    this.engine.cloud.refreshIfStale(model)
+    return this.engine.cloud.snapshot(model, settings.cloudEndpoint)
+  }
+
+  /** Measure the endpoints of the saved (or default) model now. */
+  async probe(): Promise<EndpointSnapshot> {
+    const settings = this.settings.engine()
+    const model = await this.engine.cloud.resolveModel(settings.cloudModel)
+    try {
+      return await this.engine.cloud.probe(model, settings.cloudEndpoint)
+    } catch (error) {
+      if (error instanceof DecisionError && error.code !== 'not_signed_in') return this.engine.cloud.snapshot(model, settings.cloudEndpoint)
+      throw error
+    }
+  }
+
+  /** Check an endpoint the user is about to lock against the model it will be saved with. */
+  async checkLock(model: unknown, endpoint: unknown): Promise<void> {
+    if (typeof endpoint !== 'string' || endpoint === '') throw new DecisionError('invalid_request', 'endpoint is required')
+    await this.engine.cloud.checkEndpoint(await this.engine.cloud.resolveModel(typeof model === 'string' ? model : this.settings.engine().cloudModel), endpoint)
+  }
+
+  /** Time five real judgements of a sample call on one endpoint. */
+  async requestTest(endpoint: unknown, input: unknown): Promise<TestResult> {
+    if (typeof endpoint !== 'string' || endpoint === '') throw new DecisionError('invalid_request', 'endpoint is required')
+    if (typeof input !== 'object' || input === null) throw new DecisionError('invalid_request', 'input is required')
+    const model = await this.engine.cloud.resolveModel(this.settings.engine().cloudModel)
+    return await this.engine.cloud.requestTest(model, endpoint, input as TestInput)
   }
 
   installPack(pack: string | null, source: string | null): Job {
@@ -281,8 +317,17 @@ export const ROUTES: readonly (readonly ['GET' | 'POST', string, Handler])[] = [
   ['POST', 'signin', (panel, _request, url) => panel.startSignIn(url.searchParams.get('site') ?? '')],
   ['POST', 'signin/cancel', async panel => panel.cancelSignIn()],
   ['POST', 'signout', panel => panel.signOut()],
-  ['POST', 'cloud/probe', (panel, _request, url) => panel.probe(url.searchParams.get('model'))],
   ['GET', 'cloud/models', panel => panel.cloudModels()],
+  ['GET', 'cloud/endpoints', panel => panel.endpoints()],
+  ['POST', 'cloud/probe', panel => panel.probe()],
+  ['POST', 'cloud/check-lock', async (panel, request) => {
+    const body = await bodyOf(request)
+    return await panel.checkLock(body['model'], body['endpoint'])
+  }],
+  ['POST', 'cloud/test', async (panel, request) => {
+    const body = await bodyOf(request)
+    return await panel.requestTest(body['endpoint'], body['input'])
+  }],
   ['POST', 'packs/install', async (panel, _request, url) => panel.installPack(url.searchParams.get('pack'), url.searchParams.get('source'))],
   ['POST', 'packs/remove', async (panel, _request, url) => panel.removePack(url.searchParams.get('pack'))],
   ['POST', 'models/download', async (panel, _request, url) => panel.downloadModel(url.searchParams.get('family'), url.searchParams.get('source'))],

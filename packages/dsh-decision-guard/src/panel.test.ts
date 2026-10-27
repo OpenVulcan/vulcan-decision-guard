@@ -36,7 +36,8 @@ const engine = new DecisionEngine({
   device: { display_name: 'test', client_version: 'test 0' },
   authOrigin: mock.origin,
 })
-const settings: EngineSettings = { backend: 'cloud', cloudModel: mock.model, options: DEFAULT_OPTIONS }
+// An empty model uses the first one OpenVulcan lists, as a fresh install does.
+const settings: EngineSettings = { backend: 'cloud', cloudModel: '', options: DEFAULT_OPTIONS }
 const panel = new Panel(engine, { engine: () => settings, downloadSource: () => 'official' })
 
 async function route(method: 'GET' | 'POST', name: string, query = '', body?: unknown): Promise<{ status: number; answer: { ok: boolean; value?: unknown; error?: { code: string } } }> {
@@ -68,8 +69,15 @@ test('signs in from the panel and keeps the credential as a dsh grant record', a
 })
 
 test('measures endpoints and judges a sample call with the saved settings', async () => {
+  assert.deepEqual((await route('GET', 'cloud/models')).answer.value, [mock.model])
   const probe = await route('POST', 'cloud/probe')
-  assert.equal(probe.answer.ok, true)
+  const snapshot = probe.answer.value as { modelId: string; selectedEndpointId: string; endpoints: { endpointId: string }[] }
+  assert.equal(snapshot.modelId, mock.model)
+  assert.equal(snapshot.selectedEndpointId, 'edge-a')
+  assert.equal((await route('POST', 'cloud/check-lock', '', { endpoint: 'edge-a' })).answer.ok, true)
+  assert.equal((await route('POST', 'cloud/check-lock', '', { endpoint: 'nope' })).status, 400)
+  const tested = await route('POST', 'cloud/test', '', { endpoint: 'edge-a', input: { kind: 'preset', preset: 'database_reset' } })
+  assert.equal((tested.answer.value as { succeeded: number }).succeeded, 5)
   const { answer } = await route('POST', 'test', '', { tool: 'shell_command', args: { command: 'psql -c "DROP DATABASE production"' } })
   assert.equal(answer.ok, true)
   assert.deepEqual({ ...(answer.value as object), elapsed_ms: 0 }, {
@@ -91,4 +99,5 @@ test('signing out revokes the device and deletes the record', async () => {
   const { status, answer } = await route('POST', 'test', '', { tool: 'shell_command', args: { command: 'ls' } })
   assert.equal(status, 401)
   assert.equal(answer.error?.code, 'not_signed_in')
+  assert.deepEqual((await route('GET', 'cloud/endpoints')).answer.value, { mode: 'auto', endpoints: [] })
 })

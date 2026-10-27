@@ -1,30 +1,26 @@
 /**
- * The cloud backend: OpenVulcan's decision endpoints.
+ * The cloud backend: OpenVulcan's decision endpoints, as VulcanCode uses them.
  *
- * The signed-in device asks its auth host for the models it may use (`edge-models`) and, per
- * model, for a short-lived access grant (`edge-access`): an EdDSA token valid on every endpoint of
- * that model for 10 minutes, the account's site and the endpoint list. Calls go straight to one
- * endpoint's `POST /v1/judge` with `Authorization: Bearer` and `X-OpenVulcan-Site`.
+ * The signed-in device asks its auth host for the models it may use (`edge-models`; the server
+ * decides, nothing is hard-coded) and, per model, for a short-lived access grant (`edge-access`):
+ * an EdDSA token valid on every endpoint of that model, the account's site and the endpoint list.
+ * Calls go straight to one endpoint's `POST /v1/judge` with `Authorization: Bearer` and
+ * `X-OpenVulcan-Site`.
  *
- * The endpoint is chosen by measurement, never per request: each endpoint's public `/v1/status`
- * is fetched three times at start, every 10 minutes and at most every 30 seconds after a failure;
- * the score is the median round trip plus the reported median compute time (round trip alone when
- * any endpoint has not measured compute yet), and a new endpoint wins only when it is 20% better.
- * A user lock always uses its endpoint and never fails over. A request that fails is an error,
- * never an allow, and is never retried on another endpoint.
+ * The endpoint is chosen by measurement, never per request: each endpoint's public `/v1/status` is
+ * fetched three times in a row, endpoint after endpoint, at start, every 10 minutes and at most
+ * every 30 seconds after a failure. The score is the median round trip plus the reported median
+ * compute time (round trip alone when any eligible endpoint has not measured compute yet), and a
+ * new endpoint wins only when it scores below 80% of the current one. A user lock always uses its
+ * endpoint and never fails over. A request that fails is an error, never an allow, and is never
+ * retried on another endpoint.
  */
 
 import { randomUUID } from 'node:crypto'
 
-import { DecisionError, DECISIONS, POLICY_VERSION, type JudgeInput, type ModelResult } from '../protocol.js'
+import { DecisionError, DECISIONS, POLICY_VERSION, type Decision, type DecisionOptions, type JudgeInput, type ModelResult } from '../protocol.js'
+import { renderCall } from '../render.js'
 import { HttpError, requestJson, retryAfter, postJson, type OpenVulcanAccount, type Site } from './account.js'
-
-/** Official cloud model ids, smallest first. */
-export const CLOUD_MODELS = [
-  'vulcan-decision-shell-v1-mini-preview',
-  'vulcan-decision-shell-v1-flash-preview',
-  'vulcan-decision-shell-v1-preview',
-] as const
 
 export interface EdgeEndpoint {
   readonly endpoint_id: string
@@ -59,7 +55,81 @@ export interface ProbeResult {
   readonly status?: EndpointStatus
   /** Why it cannot be used, when it cannot. */
   readonly excluded?: 'unreachable' | 'wrong_endpoint' | 'wrong_model' | 'site_not_served' | 'not_ready'
+  /** The last failure of an unreachable endpoint. */
+  readonly error?: string
   readonly at: number
+}
+
+/** One row of the endpoint table, as hosts show it. */
+export interface EndpointRow {
+  readonly endpointId: string
+  readonly endpoint: string
+  readonly priority: number
+  readonly online: boolean
+  readonly region?: string
+  readonly ready?: boolean
+  readonly acceptsSite?: boolean
+  readonly rttMs?: number
+  readonly computeP50Ms?: number
+  readonly scoreMs?: number
+  readonly error?: string
+}
+
+/** The endpoint table of the current model. */
+export interface EndpointSnapshot {
+  readonly modelId?: string
+  readonly site?: string
+  readonly mode: 'auto' | 'locked'
+  readonly lockedEndpointId?: string
+  readonly selectedEndpointId?: string
+  readonly probedAtMs?: number
+  readonly nextProbeAtMs?: number
+  /** Why there is no table: no sign-in, no model, or the grant was refused. */
+  readonly error?: string
+  readonly endpoints: readonly EndpointRow[]
+}
+
+/** The sample calls a request test can send, besides a custom command. */
+export const TEST_PRESETS = ['ordinary', 'destructive', 'database_reset', 'oversized'] as const
+export type TestPreset = typeof TEST_PRESETS[number]
+export type TestInput = { readonly kind: 'preset'; readonly preset: TestPreset } | { readonly kind: 'custom'; readonly command: string }
+
+/** One timed request of a request test. Times are milliseconds; absent when not reported. */
+export interface TestAttempt {
+  readonly requestId: string
+  readonly totalMs: number
+  readonly networkMs?: number
+  readonly endpointMs?: number
+  readonly nodeMs?: number
+  readonly queueMs?: number
+  readonly computeMs?: number
+  readonly httpStatus?: number
+  readonly tokenRenewed: boolean
+  readonly answer?: JudgeAnswer
+  readonly errorCode?: string
+  readonly error?: string
+}
+
+export interface TestResult {
+  readonly modelId: string
+  readonly endpointId: string
+  readonly endpoint: string
+  readonly site: string
+  readonly renderedChars: number
+  readonly attempts: readonly TestAttempt[]
+  readonly succeeded: number
+  readonly minMs?: number
+  readonly medianMs?: number
+  readonly maxMs?: number
+}
+
+/** A checked `/v1/judge` answer. */
+export interface JudgeAnswer {
+  readonly region?: string
+  readonly model?: string
+  readonly checkpointSha256: string
+  readonly policyVersion: string
+  readonly results: readonly ModelResult[]
 }
 
 /** Renew the grant once less than this remains. */
@@ -69,23 +139,24 @@ const PROBE_AFTER_FAILURE_MS = 30_000
 const PROBE_ATTEMPTS = 3
 const PROBE_TIMEOUT_MS = 5_000
 const JUDGE_TIMEOUT_MS = 15_000
+/** How long a model list answers "which model is the default". */
+const MODELS_TTL_MS = 10 * 60_000
 /** A challenger must score below this percentage of the current endpoint to replace it. */
 const SWITCH_PERCENT = 80
+export const TEST_ATTEMPTS = 5
+export const MAX_TEST_COMMAND = 65_536
+const OVERSIZED_DIGITS = 120_000
 const SITE = /^[a-z0-9-]{1,32}$/
 const IDENTIFIER = /^[A-Za-z0-9._:-]{1,64}$/
 
-export interface CloudStatus {
-  readonly model?: string
-  readonly site?: string
-  readonly endpoints: readonly (EdgeEndpoint & { readonly probe?: ProbeResult; readonly score?: number })[]
-  readonly selected?: string
-  readonly locked?: string
-  readonly probedAt?: number
-}
+/** The policy options a request test sends: the cloud policy's defaults. */
+const TEST_SETTINGS: DecisionOptions = { cross_project_writes: 'allow', database_reset: 'confirm', project_reset: 'confirm' }
 
 export class EdgeClient {
   private grant: EdgeGrant | undefined
   private grantKey: string | undefined
+  private grantError: { model: string; message: string } | undefined
+  private modelList: { key: string; at: number; models: string[] } | undefined
   private probes = new Map<string, ProbeResult>()
   private probedFor: string | undefined
   private probedAt = 0
@@ -95,34 +166,69 @@ export class EdgeClient {
 
   constructor(private readonly account: OpenVulcanAccount, private readonly fetchImpl: typeof fetch = fetch) {}
 
-  /** Models this account may use. */
+  /** Models this account may use, sorted; the first is the default. */
   async models(): Promise<string[]> {
     const credential = await this.account.credential()
     const answer = await this.call(() => requestJson(`${credential.auth_origin}/api/v1/vulcancode/edge-models`, credential.access_token, { method: 'GET' })) as { models?: unknown }
     if (!Array.isArray(answer.models)) throw new DecisionError('model_failed', 'OpenVulcan answered a malformed model list')
-    return answer.models.flatMap(model => typeof model?.model_id === 'string' && IDENTIFIER.test(model.model_id) ? [model.model_id as string] : [])
+    const models = [...new Set(answer.models.flatMap(model => typeof model?.model_id === 'string' && IDENTIFIER.test(model.model_id) ? [model.model_id as string] : []))].sort()
+    this.modelList = { key: credential.authorization_id, at: Date.now(), models }
+    return models
   }
 
-  /** What the panel shows: the current grant's endpoints with their last probes. */
-  status(lock?: string): CloudStatus {
+  /**
+   * The model to use: the saved one, or else the first one OpenVulcan lists for this account.
+   * @throws DecisionError when nothing is saved and the account has no model.
+   */
+  async resolveModel(saved: string | undefined): Promise<string> {
+    if (saved !== undefined && saved !== '') return saved
+    const credential = await this.account.credential()
+    const cached = this.modelList
+    const models = cached !== undefined && cached.key === credential.authorization_id && Date.now() - cached.at < MODELS_TTL_MS ? cached.models : await this.models()
+    if (models[0] === undefined) throw new DecisionError('backend_unavailable', 'OpenVulcan offers no cloud decision model to this account')
+    return models[0]
+  }
+
+  /** The endpoint table of `model` with the last measurements, without measuring. */
+  snapshot(model: string | undefined, lock?: string): EndpointSnapshot {
+    const locked = lock === undefined || lock === '' ? undefined : lock
+    const base = { mode: locked === undefined ? 'auto' as const : 'locked' as const, ...locked === undefined ? {} : { lockedEndpointId: locked } }
     const grant = this.grant
+    if (grant === undefined || grant.model_id !== model) {
+      const error = this.grantError !== undefined && this.grantError.model === model ? this.grantError.message : undefined
+      return { ...base, ...model === undefined ? {} : { modelId: model }, ...error === undefined ? {} : { error }, endpoints: [] }
+    }
+    const withCompute = this.compareCompute()
+    const measured = this.probedFor === grant.model_id
     return {
-      ...grant === undefined ? {} : { model: grant.model_id, site: grant.site },
-      endpoints: (grant?.endpoints ?? []).map(endpoint => {
-        const probe = this.probes.get(endpoint.endpoint_id)
-        const score = probe === undefined ? undefined : scoreOf(probe, this.compareCompute())
-        return { ...endpoint, ...probe === undefined ? {} : { probe }, ...score === undefined ? {} : { score } }
+      ...base,
+      modelId: grant.model_id,
+      site: grant.site,
+      ...this.selected === undefined ? {} : { selectedEndpointId: this.selected },
+      ...measured ? { probedAtMs: this.probedAt, nextProbeAtMs: this.probedAt + PROBE_INTERVAL_MS } : {},
+      endpoints: [...grant.endpoints].sort(byPriority).map((endpoint) => {
+        const probe = measured ? this.probes.get(endpoint.endpoint_id) : undefined
+        const score = probe === undefined ? undefined : scoreOf(probe, withCompute)
+        const status = probe?.status
+        return {
+          endpointId: endpoint.endpoint_id, endpoint: endpoint.endpoint, priority: endpoint.priority, online: endpoint.online,
+          ...status?.region === undefined ? {} : { region: status.region },
+          ...status === undefined ? {} : { ready: status.ready, acceptsSite: status.sites.includes(grant.site) },
+          ...probe?.rtt_ms === undefined ? {} : { rttMs: probe.rtt_ms },
+          ...status?.compute_ms == null ? {} : { computeP50Ms: status.compute_ms.p50 },
+          ...score === undefined ? {} : { scoreMs: score },
+          ...probe?.error === undefined ? {} : { error: probe.error },
+        }
       }),
-      ...this.selected === undefined ? {} : { selected: this.selected },
-      ...lock === undefined ? {} : { locked: lock },
-      ...this.probedAt === 0 ? {} : { probedAt: this.probedAt },
     }
   }
 
-  /** Forget grants and measurements, after a sign-out or account change. */
+  /** Forget grants, model lists and measurements, after a sign-out or account change. */
   reset(): void {
     this.grant = undefined
     this.grantKey = undefined
+    this.grantError = undefined
+    this.modelList = undefined
     this.probes.clear()
     this.probedFor = undefined
     this.probedAt = 0
@@ -133,13 +239,25 @@ export class EdgeClient {
    * Measure every endpoint of `model` now and update the selection.
    * @param lock the endpoint id the user locked, which is never replaced.
    */
-  async probe(model: string, lock?: string): Promise<CloudStatus> {
+  async probe(model: string, lock?: string): Promise<EndpointSnapshot> {
     const grant = await this.access(model)
-    this.probing ??= this.measure(grant).finally(() => {
-      this.probing = undefined
-    })
-    await this.probing
-    return this.status(lock)
+    await this.measureOnce(grant)
+    return this.snapshot(model, lock)
+  }
+
+  /** Measure `model` in the background when its last measurement is older than the interval. */
+  refreshIfStale(model: string): void {
+    if (this.probing !== undefined) return
+    if (this.probedFor === model && Date.now() - this.probedAt < PROBE_INTERVAL_MS) return
+    void this.access(model).then(grant => this.measureOnce(grant)).catch(() => {})
+  }
+
+  /** Check that `endpointId` serves `model`, for a lock the user is about to save. */
+  async checkEndpoint(model: string, endpointId: string): Promise<void> {
+    const grant = await this.access(model)
+    if (!grant.endpoints.some(endpoint => endpoint.endpoint_id === endpointId)) {
+      throw new DecisionError('invalid_request', `${endpointId} does not serve ${model}`)
+    }
   }
 
   /**
@@ -148,15 +266,14 @@ export class EdgeClient {
    */
   async judge(model: string, inputs: readonly JudgeInput[], lock?: string): Promise<{ results: ModelResult[]; endpoint: string }> {
     let grant = await this.access(model)
-    if (this.probedFor !== model || Date.now() - this.probedAt > PROBE_INTERVAL_MS) this.background(grant)
+    this.refreshIfStale(model)
     const endpoint = this.choose(grant, lock)
     try {
       return { results: await this.send(grant, endpoint, inputs), endpoint: endpoint.endpoint_id }
     } catch (error) {
       if (error instanceof HttpError && error.status === 401) {
         // The grant may have been rotated out; renew it once and retry once.
-        this.grant = undefined
-        grant = await this.access(model)
+        grant = await this.access(model, true)
         const again = this.choose(grant, lock)
         return { results: await this.send(grant, again, inputs), endpoint: again.endpoint_id }
       }
@@ -164,11 +281,44 @@ export class EdgeClient {
     }
   }
 
-  private async send(grant: EdgeGrant, endpoint: EdgeEndpoint, inputs: readonly JudgeInput[]): Promise<ModelResult[]> {
-    const requestId = randomUUID()
-    let response: Response
+  /**
+   * Send {@link TEST_ATTEMPTS} real judgements of one sample call to one endpoint, one after
+   * another, and time each. The grant is fetched first so its call is not timed. Nothing changes
+   * the selection.
+   */
+  async requestTest(model: string, endpointId: string, input: TestInput): Promise<TestResult> {
+    const command = testCommand(input)
+    let grant = await this.access(model)
+    let endpoint = grant.endpoints.find(item => item.endpoint_id === endpointId)
+    if (endpoint === undefined) throw new DecisionError('invalid_request', `${endpointId} does not serve ${model}`)
+    const rendered = renderCall({ tool: 'shell_command', arguments: { command } })
+    const attempts: TestAttempt[] = []
+    for (let index = 0; index < TEST_ATTEMPTS; index++) {
+      const requestId = `permission-judge-test-${randomUUID()}`
+      const body = { request_id: requestId, inputs: [{ settings: TEST_SETTINGS, rendered }] }
+      let reply = await this.post(grant, endpoint, body)
+      let renewed = false
+      if (reply.status === 401) {
+        grant = await this.access(model, true)
+        endpoint = grant.endpoints.find(item => item.endpoint_id === endpointId) ?? endpoint
+        reply = await this.post(grant, endpoint, body)
+        renewed = true
+      }
+      attempts.push(testAttempt(requestId, reply, renewed))
+      if (reply.status === undefined) break
+    }
+    const times = attempts.filter(attempt => attempt.answer !== undefined && attempt.error === undefined).map(attempt => attempt.totalMs).sort((a, b) => a - b)
+    return {
+      modelId: model, endpointId, endpoint: endpoint.endpoint, site: grant.site, renderedChars: rendered.length, attempts,
+      succeeded: times.length,
+      ...times.length === 0 ? {} : { minMs: times[0]!, medianMs: times[Math.floor((times.length - 1) / 2)]!, maxMs: times[times.length - 1]! },
+    }
+  }
+
+  private async post(grant: EdgeGrant, endpoint: EdgeEndpoint, body: unknown): Promise<Reply> {
+    const started = performance.now()
     try {
-      response = await this.fetchImpl(`${endpoint.endpoint}/v1/judge`, {
+      const response = await this.fetchImpl(`${endpoint.endpoint}/v1/judge`, {
         method: 'POST',
         redirect: 'error',
         signal: AbortSignal.timeout(JUDGE_TIMEOUT_MS),
@@ -178,54 +328,66 @@ export class EdgeClient {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
         },
-        body: JSON.stringify({ request_id: requestId, inputs }),
+        body: JSON.stringify(body),
       })
+      const text = await response.text()
+      return { status: response.status, text, headers: response.headers, totalMs: performance.now() - started }
     } catch (error) {
-      this.afterFailure(grant)
-      throw new DecisionError('backend_unavailable', `${endpoint.endpoint_id} cannot be reached: ${(error as Error).message}`)
+      return { text: '', totalMs: performance.now() - started, failure: (error as Error).message }
     }
-    const text = await response.text()
-    if (!response.ok) {
-      let code: string | undefined
-      try {
-        code = (JSON.parse(text) as { error?: unknown }).error as string | undefined
-      } catch {
-        // No error code to report.
-      }
-      if (response.status === 401) throw new HttpError(401, code, 'the access grant was refused')
-      if (response.status === 429) {
-        const wait = retryAfter(response.headers.get('Retry-After'))
-        throw new DecisionError('rate_limited', `${endpoint.endpoint_id} is rate limiting this account`, wait)
-      }
-      if (response.status >= 500 || code === 'site_not_accepted') this.afterFailure(grant)
-      throw new DecisionError(response.status >= 500 ? 'backend_unavailable' : 'model_failed',
-        `${endpoint.endpoint_id} answered HTTP ${response.status}${code === undefined ? '' : ` (${code})`}`)
-    }
-    return parseJudgeAnswer(text, requestId, inputs.length)
   }
 
-  /** The current grant for `model`, renewed when it is about to expire. */
-  private async access(model: string): Promise<EdgeGrant> {
+  private async send(grant: EdgeGrant, endpoint: EdgeEndpoint, inputs: readonly JudgeInput[]): Promise<ModelResult[]> {
+    const requestId = `permission-judge-${randomUUID()}`
+    const reply = await this.post(grant, endpoint, { request_id: requestId, inputs })
+    if (reply.status === undefined) {
+      this.afterFailure(grant)
+      throw new DecisionError('backend_unavailable', `${endpoint.endpoint_id} cannot be reached: ${reply.failure}`)
+    }
+    if (reply.status < 200 || reply.status >= 300) {
+      const code = endpointErrorCode(reply.text)
+      if (reply.status === 401) throw new HttpError(401, code, 'the access grant was refused')
+      if (reply.status === 429) {
+        const wait = retryAfter(reply.headers?.get('Retry-After') ?? null)
+        throw new DecisionError('rate_limited', `${endpoint.endpoint_id} is rate limiting this account`, wait)
+      }
+      if (reply.status >= 500 || code === 'site_not_accepted') this.afterFailure(grant)
+      throw new DecisionError(reply.status >= 500 ? 'backend_unavailable' : 'model_failed',
+        `${endpoint.endpoint_id} answered HTTP ${reply.status}${code === undefined ? '' : ` (${code})`}`)
+    }
+    return parseJudgeEnvelope(reply.text, requestId, inputs.length).results as ModelResult[]
+  }
+
+  /** The current grant for `model`, renewed when it is about to expire or `renew` is set. */
+  private async access(model: string, renew = false): Promise<EdgeGrant> {
     const credential = await this.account.credential()
     const key = `${credential.authorization_id}\n${model}`
-    if (this.grant !== undefined && this.grantKey === key && Date.parse(this.grant.expires_at) - Date.now() > GRANT_RENEW_MS) return this.grant
-    const answer = await this.call(() => postJson(`${credential.auth_origin}/api/v1/vulcancode/edge-access`, credential.access_token,
-      { model_id: model, client_id: credential.authorization_id }))
+    if (!renew && this.grant !== undefined && this.grantKey === key && Date.parse(this.grant.expires_at) - Date.now() > GRANT_RENEW_MS) return this.grant
+    let answer: unknown
+    try {
+      answer = await this.call(() => postJson(`${credential.auth_origin}/api/v1/vulcancode/edge-access`, credential.access_token,
+        { model_id: model, client_id: credential.authorization_id }), model)
+    } catch (error) {
+      this.grantError = { model, message: (error as Error).message }
+      throw error
+    }
     const grant = parseGrant(answer, model)
     if (this.grantKey !== key) {
       this.probes.clear()
       this.selected = undefined
       this.probedFor = undefined
+      this.probedAt = 0
     }
     this.grant = grant
     this.grantKey = key
+    this.grantError = undefined
     return grant
   }
 
   private choose(grant: EdgeGrant, lock?: string): EdgeEndpoint {
     if (lock !== undefined && lock !== '') {
       const locked = grant.endpoints.find(endpoint => endpoint.endpoint_id === lock)
-      if (locked === undefined) throw new DecisionError('backend_unavailable', `the locked endpoint ${lock} does not serve ${grant.model_id}`)
+      if (locked === undefined) throw new DecisionError('backend_unavailable', `the locked endpoint ${lock} is not offered for ${grant.model_id}`)
       return locked
     }
     const selected = grant.endpoints.find(endpoint => endpoint.endpoint_id === this.selected)
@@ -234,20 +396,24 @@ export class EdgeClient {
     return [...grant.endpoints].sort(byPriority)[0]!
   }
 
-  private background(grant: EdgeGrant): void {
-    this.probing ??= this.measure(grant).catch(() => {}).finally(() => {
+  private measureOnce(grant: EdgeGrant): Promise<void> {
+    this.probing ??= this.measure(grant).finally(() => {
       this.probing = undefined
     })
+    return this.probing
   }
 
   private afterFailure(grant: EdgeGrant): void {
     if (Date.now() - this.lastFailureProbe < PROBE_AFTER_FAILURE_MS) return
     this.lastFailureProbe = Date.now()
-    this.background(grant)
+    this.measureOnce(grant).catch(() => {})
   }
 
   private async measure(grant: EdgeGrant): Promise<void> {
-    const results = await Promise.all(grant.endpoints.map(endpoint => this.probeEndpoint(endpoint, grant)))
+    const results: ProbeResult[] = []
+    for (const endpoint of [...grant.endpoints].sort(byPriority)) results.push(await this.probeEndpoint(endpoint, grant))
+    // A grant renewed for another account or model meanwhile makes these results stale.
+    if (this.grant?.model_id !== grant.model_id) return
     this.probes = new Map(results.map(result => [result.endpoint_id, result]))
     this.probedFor = grant.model_id
     this.probedAt = Date.now()
@@ -257,20 +423,31 @@ export class EdgeClient {
   private async probeEndpoint(endpoint: EdgeEndpoint, grant: EdgeGrant): Promise<ProbeResult> {
     const rtts: number[] = []
     let status: EndpointStatus | undefined
+    let failure: string | undefined
     for (let attempt = 0; attempt < PROBE_ATTEMPTS; attempt++) {
       const started = performance.now()
       try {
-        const response = await this.fetchImpl(`${endpoint.endpoint}/v1/status`, { redirect: 'error', signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) })
+        const response = await this.fetchImpl(`${endpoint.endpoint}/v1/status`, {
+          redirect: 'error', signal: AbortSignal.timeout(PROBE_TIMEOUT_MS), headers: { 'Cache-Control': 'no-store' },
+        })
         const body = await response.json() as unknown
-        if (!response.ok) continue
+        if (!response.ok) {
+          failure = `HTTP ${response.status}`
+          continue
+        }
+        const parsed = parseStatus(body)
+        if (parsed === undefined) {
+          failure = 'malformed status'
+          continue
+        }
         rtts.push(performance.now() - started)
-        status = parseStatus(body) ?? status
-      } catch {
-        // A failed attempt only counts against the median.
+        status = parsed
+      } catch (error) {
+        failure = (error as Error).message
       }
     }
     const at = Date.now()
-    if (rtts.length === 0 || status === undefined) return { endpoint_id: endpoint.endpoint_id, excluded: 'unreachable', at }
+    if (rtts.length === 0 || status === undefined) return { endpoint_id: endpoint.endpoint_id, excluded: 'unreachable', ...failure === undefined ? {} : { error: failure }, at }
     const sorted = rtts.sort((a, b) => a - b)
     const rtt = Math.round(sorted[Math.floor((sorted.length - 1) / 2)]!)
     const base = { endpoint_id: endpoint.endpoint_id, rtt_ms: rtt, status, at }
@@ -287,7 +464,7 @@ export class EdgeClient {
   }
 
   /** Map account-host failures to decision errors. */
-  private async call<T>(work: () => Promise<T>): Promise<T> {
+  private async call<T>(work: () => Promise<T>, model?: string): Promise<T> {
     try {
       return await work()
     } catch (error) {
@@ -295,10 +472,89 @@ export class EdgeClient {
       if (error instanceof HttpError) {
         if (error.status === 401) throw new DecisionError('not_signed_in', 'OpenVulcan refused the sign-in; sign in again')
         if (error.status === 429) throw new DecisionError('rate_limited', error.message, error.retryAfterMs)
+        if (error.status === 404 && error.code === 'model_unavailable' && model !== undefined) {
+          throw new DecisionError('backend_unavailable', `OpenVulcan does not currently enable the cloud model ${model}`)
+        }
         if (error.status === 404) throw new DecisionError('invalid_request', error.message)
+        throw new DecisionError('backend_unavailable', `OpenVulcan refused: ${error.message}`)
       }
       throw new DecisionError('backend_unavailable', `OpenVulcan cannot be reached: ${(error as Error).message}`)
     }
+  }
+}
+
+/** One `/v1/judge` exchange; `status` is absent when no HTTP answer arrived. */
+interface Reply {
+  readonly status?: number
+  readonly text: string
+  readonly headers?: Headers
+  readonly totalMs: number
+  readonly failure?: string
+}
+
+/** The command a request test sends. */
+export function testCommand(input: TestInput): string {
+  if (input.kind === 'custom') {
+    if (typeof input.command !== 'string' || input.command.trim() === '') throw new DecisionError('invalid_request', 'the command is empty')
+    if (input.command.length > MAX_TEST_COMMAND) throw new DecisionError('invalid_request', `the command is longer than ${MAX_TEST_COMMAND} characters`)
+    return input.command
+  }
+  switch (input.preset) {
+    case 'ordinary': return 'git status'
+    case 'destructive': return 'rm -rf ~'
+    case 'database_reset': return 'psql -d app -c \'DROP SCHEMA public CASCADE\''
+    case 'oversized': {
+      const hex = '0123456789abcdef'
+      let digits = ''
+      for (let i = 0; i < OVERSIZED_DIGITS; i++) digits += hex[(i * 7 + Math.floor(i / 16)) % 16]
+      return `echo ${digits} > payload.hex`
+    }
+    default: throw new DecisionError('invalid_request', `unknown preset ${String((input as { preset?: unknown }).preset)}`)
+  }
+}
+
+function testAttempt(requestId: string, reply: Reply, tokenRenewed: boolean): TestAttempt {
+  const totalMs = Math.round(reply.totalMs)
+  const base = { requestId, totalMs, tokenRenewed }
+  if (reply.status === undefined) return { ...base, errorCode: 'unreachable', error: reply.failure ?? 'no answer' }
+  const timing = parseServerTiming(reply.headers?.get('Server-Timing') ?? null)
+  const timed = {
+    ...base, httpStatus: reply.status,
+    ...timing.edge === undefined ? {} : { endpointMs: timing.edge, networkMs: Math.max(totalMs - timing.edge, 0) },
+    ...timing.node === undefined ? {} : { nodeMs: timing.node },
+    ...timing.queue === undefined ? {} : { queueMs: timing.queue },
+    ...timing.compute === undefined ? {} : { computeMs: timing.compute },
+  }
+  if (reply.status < 200 || reply.status >= 300) {
+    const code = endpointErrorCode(reply.text)
+    return { ...timed, ...code === undefined ? {} : { errorCode: code }, error: `HTTP ${reply.status}` }
+  }
+  try {
+    return { ...timed, answer: parseJudgeEnvelope(reply.text, requestId, 1) }
+  } catch (error) {
+    return { ...timed, errorCode: 'malformed_answer', error: (error as Error).message }
+  }
+}
+
+/** The `edge`, `node`, `queue` and `compute` durations of a `Server-Timing` header. */
+export function parseServerTiming(header: string | null): Partial<Record<'edge' | 'node' | 'queue' | 'compute', number>> {
+  const timing: Partial<Record<'edge' | 'node' | 'queue' | 'compute', number>> = {}
+  for (const metric of (header ?? '').split(',')) {
+    const [name, ...params] = metric.split(';').map(part => part.trim())
+    if (name !== 'edge' && name !== 'node' && name !== 'queue' && name !== 'compute') continue
+    const dur = params.find(param => param.startsWith('dur='))
+    const value = dur === undefined ? Number.NaN : Number(dur.slice(4))
+    if (Number.isFinite(value) && value >= 0) timing[name] = value
+  }
+  return timing
+}
+
+function endpointErrorCode(text: string): string | undefined {
+  try {
+    const error = (JSON.parse(text) as { error?: unknown }).error
+    return typeof error === 'string' ? error : undefined
+  } catch {
+    return undefined
   }
 }
 
@@ -343,9 +599,10 @@ export function parseGrant(value: unknown, model: string): EdgeGrant {
   const endpoints = grant.endpoints.map((endpoint: Partial<EdgeEndpoint>) => {
     if (typeof endpoint.endpoint_id !== 'string' || !IDENTIFIER.test(endpoint.endpoint_id) || ids.has(endpoint.endpoint_id)) throw fail('endpoint id')
     ids.add(endpoint.endpoint_id)
-    if (typeof endpoint.endpoint !== 'string' || !isEndpointOrigin(endpoint.endpoint)) throw fail(`endpoint ${endpoint.endpoint_id}`)
+    const origin = typeof endpoint.endpoint === 'string' ? endpoint.endpoint.replace(/\/$/, '') : ''
+    if (!isEndpointOrigin(origin)) throw fail(`endpoint ${endpoint.endpoint_id}`)
     return {
-      endpoint_id: endpoint.endpoint_id, endpoint: endpoint.endpoint,
+      endpoint_id: endpoint.endpoint_id, endpoint: origin,
       priority: typeof endpoint.priority === 'number' ? endpoint.priority : 0, online: endpoint.online === true,
     }
   })
@@ -384,8 +641,13 @@ export function parseStatus(value: unknown): EndpointStatus | undefined {
 
 /** Check a `/v1/judge` answer against the request before anyone acts on it. */
 export function parseJudgeAnswer(text: string, requestId: string, count: number): ModelResult[] {
+  return parseJudgeEnvelope(text, requestId, count).results as ModelResult[]
+}
+
+/** {@link parseJudgeAnswer} with the answer's region, model and checkpoint. */
+export function parseJudgeEnvelope(text: string, requestId: string, count: number): JudgeAnswer {
   const fail = (what: string) => new DecisionError('model_failed', `the endpoint answered ${what}`)
-  let answer: { request_id?: unknown; checkpoint_sha256?: unknown; policy_version?: unknown; results?: unknown }
+  let answer: { request_id?: unknown; region?: unknown; model?: unknown; checkpoint_sha256?: unknown; policy_version?: unknown; results?: unknown }
   try {
     answer = JSON.parse(text) as typeof answer
   } catch {
@@ -395,15 +657,20 @@ export function parseJudgeAnswer(text: string, requestId: string, count: number)
   if (typeof answer.checkpoint_sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(answer.checkpoint_sha256)) throw fail('no checkpoint')
   if (answer.policy_version !== POLICY_VERSION) throw fail(`policy ${String(answer.policy_version)}`)
   if (!Array.isArray(answer.results) || answer.results.length !== count) throw fail('the wrong number of results')
-  return answer.results.map((item: { label?: unknown; logits?: unknown; input_tokens?: unknown; model_evaluated?: unknown; reason_code?: unknown }) => {
+  const results = answer.results.map((item: { label?: unknown; logits?: unknown; input_tokens?: unknown; model_evaluated?: unknown; reason_code?: unknown }) => {
     if (!(DECISIONS as readonly unknown[]).includes(item.label)) throw fail('no decision')
     const logits = Array.isArray(item.logits) && item.logits.length === 3 && item.logits.every(Number.isFinite) ? item.logits as number[] : undefined
     return {
-      decision: item.label as ModelResult['decision'],
+      decision: item.label as Decision,
       ...logits === undefined ? {} : { logits },
       ...typeof item.input_tokens === 'number' ? { input_tokens: item.input_tokens } : {},
       model_evaluated: item.model_evaluated !== false,
       ...typeof item.reason_code === 'string' ? { reason_code: item.reason_code } : {},
     }
   })
+  return {
+    ...typeof answer.region === 'string' ? { region: answer.region } : {},
+    ...typeof answer.model === 'string' ? { model: answer.model } : {},
+    checkpointSha256: answer.checkpoint_sha256, policyVersion: answer.policy_version, results,
+  }
 }

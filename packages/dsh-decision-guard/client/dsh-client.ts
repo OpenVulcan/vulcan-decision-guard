@@ -11,6 +11,9 @@
  * - `packages/interaction/permission-presets/src/types.ts` (`PermissionCatalog`)
  * - `packages/client/ui-approval/src/client/contract/slots.ts` (`PendingApproval`)
  * - `packages/client/ui-conversation/src/client/contract/slots.ts` (composer chain, input slots)
+ * - `packages/client/ui-settings/src/client/contract/slots.ts` (`settings.section`)
+ * - `packages/client/ui-settings-general/src/client/{index,shell-store}.ts` (`sidebar.settings` store)
+ * - `packages/client/locale/src/client/index.ts` (`bind`)
  * - `packages/client/ui-session/src/client/index.ts` (`sessionId`, `useProjection` props)
  * - `packages/api/session-controller/src/client/contract/{sessions,session}.ts` (`binding`, `command`)
  * - `packages/api/session-controller/src/types.ts` (`ModelCatalog`)
@@ -120,6 +123,18 @@ export interface ComposerProps<M> {
   readonly resolveText: (text: LocalizedText) => string
 }
 
+/** Owner props of a Settings dialog section, plus the dictionary of its locale namespace. */
+export interface SettingsSectionProps {
+  /** Close the Settings dialog. */
+  readonly close: () => void
+  readonly t: (key: string) => string
+}
+
+/** The Settings dialog store's actions this client uses. */
+export interface SettingsShell {
+  readonly actions: { openSection(id: string): void }
+}
+
 /** Session-scoped props every session slot entry receives; only the fields read here. */
 export interface SessionSlotProps {
   readonly sessionId: string
@@ -146,16 +161,32 @@ export interface ClientContext {
   readonly locale: {
     register(namespace: string, dictionaries: Readonly<Record<string, Readonly<Record<string, string>>>>): () => void
     resolveText(text: LocalizedText): string
+    /** The current dictionary of one namespace. */
+    bind(namespace: string): (key: string) => string
   }
   readonly slots: {
     inject(name: string, callback: () => () => void): void
-    register(
-      options: { readonly name: string; readonly id: string; readonly locale: string },
-      component: (props: DetailProps) => import('react').ReactNode,
+    /** Registered entries of a slot; the settings shell's carries the dialog's store. */
+    entries(name: string): readonly { readonly store?: { create(): unknown } | undefined }[]
+    register<I extends object>(
+      options: { readonly name: string; readonly id: string; readonly locale: string; readonly inject: () => I },
+      component: (props: DetailProps & I) => import('react').ReactNode,
     ): () => void
-    register(
-      options: { readonly name: 'plugins.bundle.config'; readonly key: string; readonly locale: string },
-      component: (props: ConfigPageProps) => import('react').ReactNode,
+    register<I extends object>(
+      options: { readonly name: 'plugins.bundle.config'; readonly key: string; readonly locale: string; readonly inject: () => I },
+      component: (props: ConfigPageProps & I) => import('react').ReactNode,
+    ): () => void
+    register<I extends object>(
+      options: {
+        readonly name: 'settings.section'
+        readonly id: string
+        readonly order: number
+        /** Read by the shell on every render, so it follows the interface language. */
+        readonly label: () => string
+        readonly locale: string
+        readonly inject: () => I
+      },
+      component: (props: SettingsSectionProps & I) => import('react').ReactNode,
     ): () => void
     register<M, I extends object>(
       options: {
@@ -169,7 +200,7 @@ export interface ClientContext {
     ): () => void
     register<I extends object>(
       options: {
-        readonly name: 'conversation.input.left'
+        readonly name: 'conversation.input.right'
         readonly id: string
         readonly order?: number
         readonly locale: string

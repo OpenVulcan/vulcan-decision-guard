@@ -99,7 +99,13 @@ Arguments: <实际参数的紧凑 JSON，键保持原顺序>
 - **节点选择**：按测量，不按单次请求。启动时、每 10 分钟及失败后（至多每 30 秒）各测 3 次每个节点的公开
   `/v1/status`；得分为往返中位数加节点报告的计算中位数（有节点未报告计算时只比往返），新节点须好 20% 才替换
   当前节点。用户可锁定节点，锁定后始终使用它、失败也不切换。请求失败即报错，不在其他节点上重试。
-- **云端模型**：`vulcan-decision-shell-v1-mini-preview`（默认）、`-flash-preview`、`v1-preview`。
+- **云端模型**：不在代码中列出。可用模型由 `edge-models` 按账号返回（排序去重，缓存 10 分钟），未选择时用
+  列表中的第一个；通常只提供一个模型，也可能同时提供多个。已保存但服务未列出的模型照常发出，由服务以
+  404 `model_unavailable` 拒绝，界面标为“未启用”并提示改选；503 `edge_unavailable` 属服务端故障。换模型时
+  清除节点锁定。
+- **请求测试**（与 VulcanCode 一致）：对一个节点依次发送 5 次真实判定请求（计入官方用量），按
+  `Server-Timing`（edge / node / queue / compute）分出各阶段耗时，网络 = 合计 − 端点；预设为普通命令、危险命令、
+  数据库重置、超长输入，或自定义命令（最多 65536 字符）。不改变节点选择，结果不保存。
 
 ### 4.2 本机后端（可选）
 
@@ -240,10 +246,10 @@ Arguments: <实际参数的紧凑 JSON，键保持原顺序>
   `info {name: 'VulcanDecisionDeniedError', code: 'VULCAN_DECISION_DENIED'}`。
 - **无人值守**（`src/unattended.ts`）：按会话保存为插件记录 `plugin:vulcan-decision-guard/unattended`，
   投影为会话状态 `vulcanDecision`，由命令 `/vulcan-unattended on|off` 写入（状态未变时不写）。浏览器端在
-  `conversation.input.left` 显示勾选框（独立开关模式，或当前预设为 `auto` 时）。审批策略为 `never` 的会话
+  输入框快捷卡中显示该开关（独立开关模式，或当前预设为 `auto` 时）。审批策略为 `never` 的会话
   同样按无人值守处理。
 - **配置**（`Config`，全部 `.volatile()`，每次操作开始时读取，保存后无需重启；存入 profile 的
-  `cordis.patch.yml`）：`mode`（接入方式）、`backend`（`cloud` / `local`，默认 `cloud`）、`cloudModel`（默认 mini）、
+  `cordis.patch.yml`）：`mode`（接入方式）、`backend`（`cloud` / `local`，默认 `cloud`）、`cloudModel`（默认空，即服务列出的第一个）、
   `cloudEndpoint`（锁定的节点，空为自动）、`localPack` 与 `localModel`（本机后端使用的运行包与模型）、
   `downloadSource`（`official` / `cn`）、`review`（`session` / `custom` / `off`，默认 `session`）、`reviewProvider` 与
   `reviewModel`、`allowRules` / `denyRules` / `forbidRules`（自然语言，默认空）、`llmOverridesBlock`（默认
@@ -251,19 +257,28 @@ Arguments: <实际参数的紧凑 JSON，键保持原顺序>
   `databaseReset` 与 `projectReset`（默认 `confirm`）。
 - **面板接口**（`src/panel.ts`）：插件经 `connection.fetch.register` 在 dsh 自己的 HTTP 服务上注册
   `/api/vulcan-decision/*`，浏览器端以相对路径调用，沿用 dsh 的访问令牌，不另开端口。GET：`state`、
-  `cloud/models`；POST：`signin?site`、`signin/cancel`、`signout`、`cloud/probe?model`、`packs/install?pack&source`、
+  `cloud/models`、`cloud/endpoints`（已保存或默认模型的节点表，过期时在后台重测）；POST：`signin?site`、
+  `signin/cancel`、`signout`、`cloud/probe`、`cloud/check-lock {model?, endpoint}`、`cloud/test {endpoint, input}`、
+  `packs/install?pack&source`、
   `packs/remove?pack`、`models/download?family&source`、`models/install-dir {dir}`、`models/remove?id`、`job/cancel`、
   `test {tool, args}`。应答为 `{ok, value}` 或 `{ok:false, error:{code, message}}`（400 `invalid_request`、
   401 `not_signed_in`、429 `rate_limited`，其余 500）。同一时间只运行一个后台任务（安装运行包或模型），
   阶段为 download / unpack / install / probe / verify / done / failed / cancelled，可取消。`state` 不含任何令牌。
-- **设置页**（`client/index.tsx`）：插件自带页面，经 `settings.configure({ auto: false })` 关闭 dsh 自动生成的
-  表单，浏览器端注册到 `plugins.bundle.config`，经 `configForms.get('vulcan-decision-guard')` 读写。页面依次为：
-  状态（由 `state` 实时得出）、接入方式、判定后端；云端时为 OpenVulcan 账号（站点、登录与取消、退出）、云端
-  模型、判定节点（测速、往返与计算耗时、锁定）；本机时为硬件与建议、运行包（适配标签、大小、安装 / 更新 /
-  删除与进度、下载源）、本机模型（已安装、按来源下载、从本地目录安装）、使用的运行包与模型（格式不匹配时
-  提示）；随后为试判定（安全与高风险两个示例）、授权选项、模型未放行的调用（复核模型，指定模型时从
-  `remote.session.modelCatalog()` 选择；允许 LLM 推翻拦截；绝对禁止、拒绝、允许三组规则；询问倒计时）。
-  登录或后台任务进行中时每秒刷新一次状态。
+- **设置位置**：dsh 的「设置」对话框中新增“自动审批”一节（`settings.section`，id `vulcan-auto-approval`，
+  排在 Agent 预设之后），经 `settings.configure({ auto: false })` 关闭 dsh 自动生成的表单，经
+  `configForms.get('vulcan-decision-guard')` 读写；每个控件改动即保存，只有三组规则用“保存规则”按钮一起保存。
+  插件页（`plugins.bundle.config`）不再放配置，只有一句说明与“打开自动审批设置”按钮（经 `sidebar.settings`
+  的 store 调用 `openSection`）。界面沿用 VulcanCode 的样式（直角、细线、带编号的分节与橙色角标、浅色标签），
+  样式表限定在 `.vdg` 下，深色跟随 `body[data-ds-dark-theme]`。
+- **设置页**（`client/settings.tsx`、`cloud.tsx`、`local.tsx`）依次为：状态、接入方式、判定模型；云端时为
+  OpenVulcan 账号（中国站 / 国际站卡片、等待授权与取消、退出）、官方模型（来自 `cloud/models`）、端点
+  （`cloud/endpoints` 每 2 秒刷新；端点、地区、网络、计算、合计、状态、请求测试七列，使用中 / 已锁定标签；
+  “立即重新测试”；“自动（延迟最低）/ 始终使用 X”，锁定前经 `cloud/check-lock` 确认）与请求测试对话框；本机时为
+  硬件与建议、运行包表、本机模型、本机判定使用的运行包与模型；随后为授权选项、复核 LLM（含指定模型与允许
+  LLM 推翻拦截）、复核规则、询问倒计时、试判定。登录或后台任务进行中时每秒刷新一次状态。
+- **输入框快捷卡**（`client/quick.tsx`）：`conversation.input.right`（order 10，模型选择器左侧）显示一个带状态点的
+  “自动审批”标签（未受管控时为“未启用”，无人值守时为“无人值守”），点开为卡片：判定模型、锁定端点、复核 LLM、
+  允许 LLM 推翻拦截、询问倒计时、本会话的无人值守开关，以及跳到完整设置的链接。
 - **与权限预设的关系**：dsh 的权限预设表只有配置预设与一个固定的 `auto` 槽位；`auto` 同时只能由一个集成
   注册，组合固定为 `danger-full-access` 沙箱加 `ask` 审批。`registerAuto(admit)` 不接受说明文字，选择 Auto
   时的确认对话框文字由 dsh 固定，描述的是 dsh 自带 Auto review 的行为。
@@ -272,7 +287,7 @@ Arguments: <实际参数的紧凑 JSON，键保持原顺序>
   | 方式 | 启用位置 | 判定范围 | 沙箱 |
   | --- | --- | --- | --- |
   | 自动预设（`auto`） | dsh 权限选择器中选择“自动审查” | 仅当前预设为 `auto` 的会话 | 无（完全权限） |
-  | 独立开关 | 本插件设置页 | 所有会话，叠加在所选预设之上 | 保留所选预设的沙箱 |
+  | 独立开关 | 设置 › 自动审批 | 所有会话，叠加在所选预设之上 | 保留所选预设的沙箱 |
 
 - **与 Auto review 的关系：替代，不共存。** 两者功能相同，只做冲突检测与提示：
   - 冲突：dsh 的 Auto review 组合包（`@deepseek-ai/dsh-experimental-auto-review`）与本插件同时启用。
@@ -309,9 +324,9 @@ docs/
    `packages/dsh-decision-guard` 里直接 `pnpm publish`，否则引擎会变成外部依赖。`@openvulcan/vulcan-decision`
    另行发布，只供命令行与日后的其他宿主使用。两个包都没有安装脚本，dsh 不会弹出“允许脚本”提示。
 2. 用户执行 `dsh plugin add @openvulcan/dsh-decision-guard`（发布前可直接 `dsh plugin add <tgz 路径>`），只装这一个
-   包；在插件设置页登录 OpenVulcan 即可使用云端判定。
-3. 需要本机判定时，在设置页切到“本机模型”，按硬件建议安装运行包，再下载模型（地址发布后）或从本地目录
-   安装，最后选择运行包与模型并保存。
+   包；在「设置 › 自动审批」登录 OpenVulcan 即可使用云端判定。
+3. 需要本机判定时，在同一页切到“本机模型”，按硬件建议安装运行包，再下载模型（地址发布后）或从本地目录
+   安装，最后选择运行包与模型。
 
 运行包与模型权重都不进入 npm 包，也不使用 `postinstall` 下载；可执行文件与大文件一律不提交到仓库。
 
@@ -342,6 +357,13 @@ docs/
 - **单包安装**（2026-10-27）：`pack:dsh` 生成的 110 KiB tgz 在全新的隔离 `DSH_HOME` 中经 `dsh plugin add` 安装，
   pnpm 只新增这一个包、不需要任何 `overrides`；dsh 启动后插件加载，面板 `state` 从内置引擎读出四个运行包、
   NPU 规划项与模型目录。
+- **设置迁移与端点表**（2026-10-27，0.2.0）：单元测试核心包 36 项、插件 26 项通过（新增：空模型取列表第一个、
+  未启用模型的错误进入节点表、请求测试 5 次与 `Server-Timing` 解析、`cloud/check-lock` 与 `cloud/test` 路由）。
+  隔离 `DSH_HOME` 端到端（模拟 OpenVulcan 中国站两个节点）：设置对话框出现“自动审批”一节；快捷卡的“全部设置”
+  与插件页按钮都直接打开该节；登录后官方模型取自服务列表，端点表测出两个节点并自动选中较快的一个；请求测试
+  对话框 5 次全部成功并显示各阶段耗时、区域、模型、策略与分数，Esc 只关闭对话框；锁定到较慢节点后表格与
+  快捷卡都显示已锁定；会话切到“自动审查”后标签变为受管控，快捷卡中打开无人值守后标签显示“无人值守”；深色
+  主题正常。
 - **Windows 路径长度**：数据目录较深时 torch 运行包的 pip 安装因路径超过 259 字符失败，已改为安装前检查并
   报告可用长度。
 - **此前已验证、本次未改动的部分**：复核、规则与无人值守的结论映射，冲突提示与 Auto 接管，设置页深色模式，

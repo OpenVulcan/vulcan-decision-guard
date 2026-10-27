@@ -12,7 +12,7 @@ import { renderCall } from './render.js'
 /** How the host wants calls judged. */
 export interface EngineSettings {
   readonly backend: BackendKind
-  /** Cloud model id. */
+  /** Cloud model id; empty uses the first model OpenVulcan lists for the account. */
   readonly cloudModel: string
   /** Endpoint id the user locked; absent means the measured best. */
   readonly cloudEndpoint?: string
@@ -50,8 +50,9 @@ export class DecisionEngine {
     const input = { settings: settings.options, rendered: renderCall(call) }
     const started = performance.now()
     if (settings.backend === 'cloud') {
-      const { results, endpoint } = await this.cloud.judge(settings.cloudModel, [input], settings.cloudEndpoint)
-      return { ...results[0]!, backend: 'cloud', model: settings.cloudModel, via: endpoint, elapsed_ms: Math.round(performance.now() - started) }
+      const model = await this.cloud.resolveModel(settings.cloudModel)
+      const { results, endpoint } = await this.cloud.judge(model, [input], settings.cloudEndpoint)
+      return { ...results[0]!, backend: 'cloud', model, via: endpoint, elapsed_ms: Math.round(performance.now() - started) }
     }
     if (settings.local === undefined) throw new DecisionError('not_installed', 'no local runtime pack and model are selected')
     const [result] = await this.local.judge(settings.local, [input])

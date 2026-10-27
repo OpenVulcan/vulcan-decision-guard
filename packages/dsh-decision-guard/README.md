@@ -10,8 +10,9 @@ dsh plugin add @openvulcan/dsh-decision-guard
 
 这是唯一需要安装的包，判定引擎 `@openvulcan/vulcan-decision` 已打包在内。
 
-安装后在 dsh 插件页打开本插件的设置面板：登录 OpenVulcan 账号即可使用云端判定；需要本机判定时切到“本机
-模型”，按硬件建议一键安装运行包与模型。登录凭据保存在 dsh 的凭据存储中，运行包与模型保存在
+安装后打开 dsh 的「设置 › 自动审批」：登录 OpenVulcan 账号即可使用云端判定，判定模型与节点由 OpenVulcan
+按账号提供；需要本机判定时切到“本机模型”，按硬件建议一键安装运行包与模型。输入框模型选择器左侧的“自动审批”
+标签可快速调整常用设置与本会话的无人值守。登录凭据保存在 dsh 的凭据存储中，运行包与模型保存在
 `$DSH_HOME/vulcan-decision/`。然后在权限选择器中选择“自动审查”，或把接入方式改为“独立开关”。说明见仓库
 [README](https://github.com/OpenVulcan/vulcan-decision-guard#readme)。
 

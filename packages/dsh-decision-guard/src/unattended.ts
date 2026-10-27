@@ -1,7 +1,7 @@
 /**
  * Per-session unattended switch. The state lives in the session's own log as a plugin record, so
  * it follows the session through restarts, forks and resumes; a session projection folds it and
- * serves it to the composer checkbox, and the `/vulcan-unattended` command is the one write path.
+ * serves it to the composer quick card, and the `/vulcan-unattended` command is the one write path.
  */
 
 import type { Context } from '@deepseek-ai/cordis'

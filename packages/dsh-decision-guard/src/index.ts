@@ -15,7 +15,7 @@ import { RUN_CODE_NAME, type PreToolDecision, type ToolExecution } from '@deepse
 import type {} from '@deepseek-ai/dsh-user-approval'
 import type {} from '@deepseek-ai/dsh-working-directory'
 import {
-  CLOUD_MODELS, DecisionEngine, DecisionHome, DOWNLOAD_SOURCES, PACK_IDS,
+  DecisionEngine, DecisionHome, DOWNLOAD_SOURCES, PACK_IDS,
   type DecisionOptions, type DownloadSource, type EngineSettings, type PackId,
 } from '@openvulcan/vulcan-decision'
 
@@ -63,7 +63,7 @@ export type Review = 'session' | 'custom' | 'off'
 export interface Config {
   mode: Volatile<Mode>
   backend: Volatile<Backend>
-  /** Cloud model id. */
+  /** Cloud model id; empty uses the first model OpenVulcan lists for the account. */
   cloudModel: Volatile<string>
   /** Endpoint id the user locked; absent uses the measured best one. */
   cloudEndpoint: Volatile<string | undefined>
@@ -99,9 +99,9 @@ export const Config = Schema.object({
     .default('cloud')
     .description('cloud: OpenVulcan judges calls after you sign in. local: an installed model runs on this machine.')
     .volatile(),
-  cloudModel: Schema.union(CLOUD_MODELS)
-    .default(CLOUD_MODELS[0])
-    .description('Cloud decision model.')
+  cloudModel: Schema.string()
+    .default('')
+    .description('Cloud decision model id; empty uses the first model OpenVulcan lists for the account.')
     .volatile(),
   cloudEndpoint: Schema.string()
     .description('Cloud endpoint id to always use; omitted uses the fastest measured one.')
@@ -466,7 +466,7 @@ export function apply(ctx: Context, config: Config): void {
     }
   })
 
-  // This plugin ships its own settings page, so schema-generated pages are turned off.
+  // This plugin ships its own page under Settings › Auto approval, so schema-generated pages are turned off.
   ctx.inject(['settings'], (child) => {
     child.effect(() => child.settings.configure({ auto: false }, ctx.fiber))
   })
@@ -499,6 +499,14 @@ export function apply(ctx: Context, config: Config): void {
     yield ctx.on('loader/volatile-update', syncSettings)
     claimAuto()
     syncIntentTool()
+
+    // Measure the cloud endpoints at start and again once a measurement is older than its interval.
+    const measure = (): void => {
+      if (config.backend.get() === 'cloud') panel.endpoints().catch(() => {})
+    }
+    measure()
+    const measuring = setInterval(measure, 60_000)
+    yield () => clearInterval(measuring)
 
     // Load the local model now so the first tool call does not wait for it.
     const warm = engineSettings()

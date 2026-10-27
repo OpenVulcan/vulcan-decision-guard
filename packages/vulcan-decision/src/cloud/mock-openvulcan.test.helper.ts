@@ -61,8 +61,8 @@ async function body(request: http.IncomingMessage): Promise<Record<string, unkno
   return text === '' ? {} : JSON.parse(text) as Record<string, unknown>
 }
 
-function json(response: http.ServerResponse, status: number, value: unknown): void {
-  response.writeHead(status, { 'Content-Type': 'application/json' }).end(JSON.stringify(value))
+function json(response: http.ServerResponse, status: number, value: unknown, headers: Record<string, string> = {}): void {
+  response.writeHead(status, { 'Content-Type': 'application/json', ...headers }).end(JSON.stringify(value))
 }
 
 export async function startMockOpenVulcan(options: {
@@ -109,10 +109,12 @@ export async function startMockOpenVulcan(options: {
             edge.judged += payload.inputs.length
             json(response, 200, {
               request_id: payload.request_id,
+              region: 'test',
+              model,
               checkpoint_sha256: 'a'.repeat(64),
               policy_version: POLICY_VERSION,
               results: payload.inputs.map(input => ({ label: mockDecision(input), logits: [1, 0, -1], input_tokens: 12, model_evaluated: true })),
-            })
+            }, { 'Server-Timing': 'edge;dur=4, node;dur=3.5, queue;dur=0.5, compute;dur=2.5' })
             return
           }
           json(response, 404, { error: 'not_found' })
@@ -193,7 +195,9 @@ export async function startMockOpenVulcan(options: {
         const authorization = signedIn(request)
         const payload = await body(request) as { model_id: string; client_id: string }
         if (authorization === undefined || payload.client_id !== authorization) return json(response, 401, { error: 'invalid_token' })
-        if (payload.model_id !== model) return json(response, 404, { error: 'unknown_model' })
+        if (payload.model_id !== model) {
+          return json(response, 404, { error: { code: 'model_unavailable', message: 'This deployment has no enabled edge endpoint for the model.' } })
+        }
         const grant = token()
         grants.add(grant)
         grantCount++

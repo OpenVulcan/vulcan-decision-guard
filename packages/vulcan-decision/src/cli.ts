@@ -7,7 +7,7 @@ import os from 'node:os'
 import { parseArgs } from 'node:util'
 
 import { FileCredentialStore, isSite, OpenVulcanAccount, type Site } from './cloud/account.js'
-import { CLOUD_MODELS, EdgeClient } from './cloud/edge.js'
+import { EdgeClient, TEST_PRESETS, type TestInput, type TestPreset } from './cloud/edge.js'
 import { DOWNLOAD_SOURCES, type DownloadSource } from './download.js'
 import { DecisionEngine } from './engine.js'
 import { detectHardware, gpuGeneration, recommend } from './hardware.js'
@@ -27,6 +27,8 @@ Usage:
   vulcan-decision account                      Show the signed-in account
   vulcan-decision cloud models                 Models this account may use
   vulcan-decision cloud probe [--model <id>]   Measure the endpoints of a cloud model
+  vulcan-decision cloud test --endpoint <id> [--model <id>] [--preset <${TEST_PRESETS.join('|')}> | --command <cmd>]
+                                               Time five real judgements on one endpoint
   vulcan-decision packs                        Runtime packs and whether they fit this machine
   vulcan-decision packs install <pack> [--source official|cn]
   vulcan-decision packs remove <pack>
@@ -120,12 +122,19 @@ async function runCloud(home: DecisionHome, args: readonly string[]): Promise<nu
     return 0
   }
   if (sub === 'probe') {
-    const { values } = parseArgs({ args: rest, options: { model: { type: 'string', default: CLOUD_MODELS[0] } } })
-    const status = await edge.probe(values.model!)
-    console.log(JSON.stringify({ ...status, endpoints: status.endpoints.map(endpoint => ({ ...endpoint })) }, null, 2))
+    const { values } = parseArgs({ args: rest, options: { model: { type: 'string' } } })
+    console.log(JSON.stringify(await edge.probe(await edge.resolveModel(values.model)), null, 2))
     return 0
   }
-  throw new Error('usage: cloud models | cloud probe [--model <id>]')
+  if (sub === 'test') {
+    const { values } = parseArgs({ args: rest, options: { model: { type: 'string' }, endpoint: { type: 'string' }, preset: { type: 'string', default: 'ordinary' }, command: { type: 'string' } } })
+    if (values.endpoint === undefined) throw new Error('--endpoint is required')
+    if (values.command === undefined && !(TEST_PRESETS as readonly string[]).includes(values.preset!)) throw new Error(`--preset must be one of ${TEST_PRESETS.join(', ')}`)
+    const input: TestInput = values.command === undefined ? { kind: 'preset', preset: values.preset as TestPreset } : { kind: 'custom', command: values.command }
+    console.log(JSON.stringify(await edge.requestTest(await edge.resolveModel(values.model), values.endpoint, input), null, 2))
+    return 0
+  }
+  throw new Error('usage: cloud models | cloud probe [--model <id>] | cloud test --endpoint <id>')
 }
 
 async function runPacks(home: DecisionHome, args: readonly string[]): Promise<number> {
@@ -219,7 +228,7 @@ async function runJudge(home: DecisionHome, args: readonly string[]): Promise<nu
     const local = values.pack === undefined ? undefined : { pack: packArgument(values.pack), model: values.model ?? '' }
     const verdict = await engine.judge(
       { tool: values.tool, arguments: JSON.parse(values.args!) as Record<string, unknown>, ...values.project === undefined ? {} : { project: values.project } },
-      { backend: local === undefined ? 'cloud' : 'local', cloudModel: values.cloud ?? CLOUD_MODELS[0], ...local === undefined ? {} : { local }, options: DEFAULT_OPTIONS },
+      { backend: local === undefined ? 'cloud' : 'local', cloudModel: values.cloud ?? '', ...local === undefined ? {} : { local }, options: DEFAULT_OPTIONS },
     )
     console.log(JSON.stringify(verdict, null, 2))
     return 0
