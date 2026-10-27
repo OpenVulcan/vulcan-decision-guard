@@ -207,7 +207,7 @@ Arguments: <実際の引数をコンパクトにした JSON>
 
 ## 📊 評価
 
-2026年10月に、凍結した同一の問題集を使って、`vulcan-decision-shell` v1 の **standard（0.8B）** と、外部の 2 つの判定サービス、
+2026年10月に、凍結した同一の問題集を使って、**`vulcan-decision-shell-v1`**（0.8B）と、外部の 2 つの判定サービス、
 JEV 1.14.0 と Alibaba Cloud の判定モデル `decision-model-preview` を 1 回限りで比較しました。3 者とも、固定の同じ英語ポリシー、
 同じ完全なツール引数、プロジェクトフォルダー、固定の許可オプションを使い、タスクの説明は付けず、最高スコアの判定を採用し、
 しきい値の調整は行っていません。
@@ -216,12 +216,12 @@ JEV 1.14.0 と Alibaba Cloud の判定モデル `decision-model-preview` を 1 �
 
 - ラベル付きの問題は私たち自身の訓練・テスト用の問題集から取っており、**その大部分は私たちが訓練した問題**です。これは私たちに明らかに有利です。
 - 正解ラベルは私たちが定めたもので、本番環境での絶対的な真実ではありません。
-- 数字は standard（0.8B）のみのものです。既定のクラウド mini（0.2B）と flash（0.35B）は挙動が異なり、ここには反映されていません。
+- 数字は `vulcan-decision-shell-v1`のみのものです。既定のクラウド `vulcan-decision-shell-v1-mini`（0.2B）と `vulcan-decision-shell-v1-flash`（0.35B）は挙動が異なり、ここには反映されていません。
 - 外部の結果は、その時点で利用できたバージョンのものです。Alibaba Cloud のサービスエイリアスでは、背後にあるウェイトを確認できません。
 
 **ラベル付き問題集（106,501 件の入力）**
 
-| 指標 | standard（0.8B） | JEV 1.14.0 | Alibaba Cloud |
+| 指標 | `vulcan-decision-shell-v1` | JEV 1.14.0 | Alibaba Cloud |
 | --- | --- | --- | --- |
 | 通常の作業をそのまま許可（高いほど良い） | 99.07% | 73.10% | 96.60% |
 | 要確認なのに許可（低いほど良い） | 2.40% | 17.03% | 90.92% |
@@ -233,7 +233,7 @@ JEV 1.14.0 と Alibaba Cloud の判定モデル `decision-model-preview` を 1 �
 それぞれ 99.76%、99.69%、99.99% でした。これは確認で中断される頻度を示すだけで、判定が正しかったかどうかは示しません。
 
 **訓練していない種類の問題**：条件付きガード、変数のコピー、クリーンアップに関する開発用ホールドアウト（3 者とも訓練していません）では、
-ブロックすべきなのに許可した割合は、standard が 43.75%、JEV が 1.88%、Alibaba Cloud が 100% で、無害なのにブロックした割合は
+ブロックすべきなのに許可した割合は、`vulcan-decision-shell-v1` が 43.75%、JEV が 1.88%、Alibaba Cloud が 100% で、無害なのにブロックした割合は
 15.36%、4.82%、0% でした。まだ対応できていない種類の問題では、JEV のほうが私たちよりはっきり優れています。
 
 この数字の読み方は次のとおりです。
@@ -292,13 +292,13 @@ dsh plugin add @openvulcan/dsh-decision-guard
 CPU パックまたはクラウドを使います。設定では GPU、ドライバー、計算能力を検出して、パックを提案します。中国本土のユーザーは、
 中国ミラーのダウンロード元を選べます。
 
-`vulcan-decision-shell` v1 には 3 つのサイズがあり、クラウドでもローカルでも利用できます。
+`vulcan-decision-shell-v1` には 3 つのサイズがあり、クラウドでもローカルでも利用できます。
 
-| サイズ | パラメーター数 | 備考 |
-| --- | --- | --- |
-| mini | 0.2B | クラウドの既定 |
-| flash | 0.35B | |
-| standard | 0.8B | 上で評価したモデル |
+| サイズ | モデル名 | パラメーター数 | 備考 |
+| --- | --- | --- | --- |
+| mini | `vulcan-decision-shell-v1-mini` | 0.2B | クラウドの既定 |
+| flash | `vulcan-decision-shell-v1-flash` | 0.35B | |
+| standard | `vulcan-decision-shell-v1` | 0.8B | 上で評価したモデル、Qwen3.5-0.8B-Base ベース |
 
 ## 🔒 判定記録とプライバシー
 
@@ -354,6 +354,10 @@ Vulcan Decision Guard は以下のオープンソースプロジェクトの上�
 **開発ツール**
 
 - [TypeScript](https://www.typescriptlang.org/)、[pnpm](https://pnpm.io/)、ランタイムパックのロックファイル生成に使う [uv](https://github.com/astral-sh/uv)
+
+**モデル**
+
+- [Qwen3.5-0.8B-Base](https://huggingface.co/Qwen/Qwen3.5-0.8B-Base)：`vulcan-decision-shell-v1` のベースモデル
 
 **コミュニティ**
 

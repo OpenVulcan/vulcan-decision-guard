@@ -220,8 +220,7 @@ respuesta del usuario indefinidamente.
 
 ## 📊 Evaluación
 
-En octubre de 2026 realizamos una comparación puntual sobre un único banco de preguntas congelado entre `vulcan-decision-shell` v1
-**standard (0.8B)** y dos servicios de decisión externos: JEV 1.14.0 y el modelo de decisión de Alibaba Cloud
+En octubre de 2026 realizamos una comparación puntual sobre un único banco de preguntas congelado entre **`vulcan-decision-shell-v1`** (0.8B) y dos servicios de decisión externos: JEV 1.14.0 y el modelo de decisión de Alibaba Cloud
 `decision-model-preview`. Los tres usaron la misma política fija en inglés, los mismos argumentos completos de las herramientas, la misma carpeta de
 proyecto y las mismas opciones de autorización fijas, sin descripción de la tarea; se tomó la decisión de mayor puntuación y no se
 ajustó ningún umbral.
@@ -231,14 +230,14 @@ Primero, los límites de estas cifras:
 - Las preguntas etiquetadas proceden de nuestro propio banco de entrenamiento y de pruebas, y **buena parte de ellas son preguntas con las que
   entrenamos**, lo que nos favorece claramente;
 - Las etiquetas de referencia son nuestras; no son la verdad absoluta para producción;
-- Las cifras corresponden solo a standard (0.8B). El mini (0.2B) y el flash (0.35B) de la nube, que son los predeterminados, rinden de forma distinta y
+- Las cifras corresponden solo a `vulcan-decision-shell-v1`. El `vulcan-decision-shell-v1-mini` (0.2B) y el `vulcan-decision-shell-v1-flash` (0.35B) de la nube, que son los predeterminados, rinden de forma distinta y
   no están representados aquí;
 - Los resultados externos reflejan las versiones disponibles en ese momento. El alias de servicio de Alibaba Cloud no permite comprobar
   qué pesos hay detrás.
 
 **Banco etiquetado (106,501 entradas)**
 
-| Métrica | standard (0.8B) | JEV 1.14.0 | Alibaba Cloud |
+| Métrica | `vulcan-decision-shell-v1` | JEV 1.14.0 | Alibaba Cloud |
 | --- | --- | --- | --- |
 | Trabajo rutinario permitido directamente (más alto es mejor) | 99.07% | 73.10% | 96.60% |
 | Permitido aunque requería revisión (más bajo es mejor) | 2.40% | 17.03% | 90.92% |
@@ -252,7 +251,7 @@ si las decisiones fueron correctas.
 
 **Tipos de preguntas con los que no hemos entrenado**: en un conjunto de desarrollo reservado de guardas condicionales, copias de variables y
 limpiezas (ninguno de los tres entrenó con él), el porcentaje permitido aunque debía bloquearse fue del 43.75% para
-standard, del 1.88% para JEV y del 100% para Alibaba Cloud; el de inofensivo pero bloqueado fue del 15.36%, el 4.82% y el 0%. En los tipos de pregunta
+`vulcan-decision-shell-v1`, del 1.88% para JEV y del 100% para Alibaba Cloud; el de inofensivo pero bloqueado fue del 15.36%, el 4.82% y el 0%. En los tipos de pregunta
 que aún no cubrimos, JEV es claramente mejor que nosotros.
 
 Cómo leer estas cifras:
@@ -314,13 +313,13 @@ Los paquetes de ejecución son un Python precompilado más wheels oficiales, y c
 Apple) usan un paquete de CPU o la nube. La configuración detecta su GPU, el controlador y la capacidad de cómputo y sugiere un paquete;
 los usuarios de China continental pueden elegir la fuente de descarga del espejo de China.
 
-`vulcan-decision-shell` v1 se ofrece en tres tamaños, disponibles tanto en la nube como en local:
+`vulcan-decision-shell-v1` se ofrece en tres tamaños, disponibles tanto en la nube como en local:
 
-| Tamaño | Parámetros | Notas |
-| --- | --- | --- |
-| mini | 0.2B | Predeterminado en la nube |
-| flash | 0.35B | |
-| standard | 0.8B | El modelo evaluado arriba |
+| Tamaño | Modelo | Parámetros | Notas |
+| --- | --- | --- | --- |
+| mini | `vulcan-decision-shell-v1-mini` | 0.2B | Predeterminado en la nube |
+| flash | `vulcan-decision-shell-v1-flash` | 0.35B | |
+| standard | `vulcan-decision-shell-v1` | 0.8B | El modelo evaluado arriba; basado en Qwen3.5-0.8B-Base |
 
 ## 🔒 Registros de decisiones y privacidad
 
@@ -379,6 +378,10 @@ Vulcan Decision Guard se apoya en los proyectos de código abierto siguientes. G
 **Herramientas de desarrollo**
 
 - [TypeScript](https://www.typescriptlang.org/), [pnpm](https://pnpm.io/) y [uv](https://github.com/astral-sh/uv) para generar los archivos de bloqueo de los paquetes de ejecución
+
+**Modelo**
+
+- [Qwen3.5-0.8B-Base](https://huggingface.co/Qwen/Qwen3.5-0.8B-Base): el modelo base de `vulcan-decision-shell-v1`
 
 **Comunidad**
 

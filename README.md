@@ -194,7 +194,7 @@ Arguments: <实际参数的紧凑 JSON>
 
 ## 📊 评测
 
-2026 年 10 月，我们用同一个冻结的题库，对 `vulcan-decision-shell` v1 **standard（0.8B）** 与两个外部判定服务
+2026 年 10 月，我们用同一个冻结的题库，对 **`vulcan-decision-shell-v1`**（0.8B）与两个外部判定服务
 做了一次性对比：JEV 1.14.0 与阿里云判定模型 `decision-model-preview`。三者使用同一套固定英文策略、同样完整的
 工具参数、项目目录与固定授权选项，不补充任务描述，取最高分结论，不调阈值。
 
@@ -202,12 +202,12 @@ Arguments: <实际参数的紧凑 JSON>
 
 - 有标签的题目来自我们自己的训练与测试题库，**其中很大一部分是我们训练过的题**，这对我们明显有利；
 - 参考标签是我们定义的，不等于生产环境的绝对真值；
-- 数字只代表 standard（0.8B）。默认的云端 mini（0.2B）与 flash（0.35B）表现不同，这里不代表它们；
+- 数字只代表 `vulcan-decision-shell-v1`。默认的云端 `vulcan-decision-shell-v1-mini`（0.2B）与 `vulcan-decision-shell-v1-flash`（0.35B）表现不同，这里不代表它们；
 - 外部服务的结果只代表测试当时的版本。阿里云的服务别名无法核对背后的权重版本。
 
 **有标签题库（106,501 条输入）**
 
-| 指标 | standard（0.8B） | JEV 1.14.0 | 阿里云 |
+| 指标 | `vulcan-decision-shell-v1` | JEV 1.14.0 | 阿里云 |
 | --- | --- | --- | --- |
 | 正常操作直接放行（越高越好） | 99.07% | 73.10% | 96.60% |
 | 应确认却直接放行（越低越好） | 2.40% | 17.03% | 90.92% |
@@ -219,7 +219,7 @@ Arguments: <实际参数的紧凑 JSON>
 99.99%。这只说明日常使用中被打扰的多少，不说明判得对不对。
 
 **我们没有训练过的题型**：在一组条件保护、变量复制与清理的开发保留题上（三方都没训练过），应拦下却直接放行的
-比例是 standard 43.75%、JEV 1.88%、阿里云 100%；无害却拦下的比例是 standard 15.36%、JEV 4.82%、阿里云 0%。
+比例是 `vulcan-decision-shell-v1` 43.75%、JEV 1.88%、阿里云 100%；无害却拦下的比例是 `vulcan-decision-shell-v1` 15.36%、JEV 4.82%、阿里云 0%。
 在这类我们尚未覆盖的题型上，JEV 明显比我们好。
 
 怎么理解这些数字：
@@ -272,13 +272,13 @@ OpenVulcan 按账号提供；设置页的端点表显示各
 没有现成运行库的显卡（AMD、Intel、Apple）使用 CPU 运行包或云端。设置页会检测显卡、驱动与计算能力并给出
 建议；国内网络可选“国内镜像”下载源。
 
-`vulcan-decision-shell` v1 有三个系列，云端与本机都可用：
+`vulcan-decision-shell-v1` 有三个系列，云端与本机都可用：
 
-| 系列 | 参数量 | 说明 |
-| --- | --- | --- |
-| mini | 0.2B | 云端默认 |
-| flash | 0.35B | |
-| standard | 0.8B | 上面评测的模型 |
+| 系列 | 模型名 | 参数量 | 说明 |
+| --- | --- | --- | --- |
+| mini | `vulcan-decision-shell-v1-mini` | 0.2B | 云端默认 |
+| flash | `vulcan-decision-shell-v1-flash` | 0.35B | |
+| standard | `vulcan-decision-shell-v1` | 0.8B | 上面评测的模型，基于 Qwen3.5-0.8B-Base |
 
 ## 🔒 判定记录与隐私
 
@@ -333,6 +333,10 @@ Vulcan Decision Guard 构建在以下开源项目之上，感谢这些项目的�
 **开发工具**
 
 - [TypeScript](https://www.typescriptlang.org/)、[pnpm](https://pnpm.io/)，以及生成运行包锁文件的 [uv](https://github.com/astral-sh/uv)
+
+**模型**
+
+- [Qwen3.5-0.8B-Base](https://huggingface.co/Qwen/Qwen3.5-0.8B-Base)：`vulcan-decision-shell-v1` 的基础模型
 
 **社区**
 

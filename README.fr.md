@@ -240,7 +240,7 @@ votre réponse indéfiniment.
 ## 📊 Évaluation
 
 En octobre 2026, nous avons mené une comparaison ponctuelle sur une seule banque de questions figée entre
-`vulcan-decision-shell` v1 **standard (0.8B)** et deux services de décision externes : JEV 1.14.0 et le modèle de
+**`vulcan-decision-shell-v1`** (0.8B) et deux services de décision externes : JEV 1.14.0 et le modèle de
 décision d'Alibaba Cloud `decision-model-preview`. Les trois ont reçu la même politique anglaise fixe, les mêmes
 arguments d'outil complets, le même dossier de projet et les mêmes options d'autorisation fixes, sans description de
 tâche ; la décision au score le plus élevé a été retenue et aucun seuil n'a été ajusté.
@@ -250,14 +250,14 @@ Voici d'abord les limites de ces chiffres :
 - Les questions étiquetées proviennent de notre propre banque d'entraînement et de test, et **une grande partie
   d'entre elles sont des questions sur lesquelles nous avons entraîné**, ce qui nous avantage nettement ;
 - Les étiquettes de référence sont les nôtres ; ce ne sont pas une vérité absolue pour la production ;
-- Les chiffres valent pour standard (0.8B) uniquement. Le mini cloud par défaut (0.2B) et flash (0.35B) se
+- Les chiffres valent pour `vulcan-decision-shell-v1` uniquement. Le `vulcan-decision-shell-v1-mini` cloud par défaut (0.2B) et `vulcan-decision-shell-v1-flash` (0.35B) se
   comportent différemment et ne sont pas représentés ici ;
 - Les résultats externes reflètent les versions disponibles à l'époque. L'alias de service d'Alibaba Cloud ne nous
   permet pas de vérifier quels poids se trouvent derrière.
 
 **Banque étiquetée (106,501 entrées)**
 
-| Indicateur | standard (0.8B) | JEV 1.14.0 | Alibaba Cloud |
+| Indicateur | `vulcan-decision-shell-v1` | JEV 1.14.0 | Alibaba Cloud |
 | --- | --- | --- | --- |
 | Travail courant autorisé directement (plus c'est haut, mieux c'est) | 99.07% | 73.10% | 96.60% |
 | Autorisé alors qu'il fallait une revue (plus c'est bas, mieux c'est) | 2.40% | 17.03% | 90.92% |
@@ -271,7 +271,7 @@ seriez interrompu, pas si les décisions étaient justes.
 
 **Types de questions sur lesquels nous n'avons pas entraîné** : sur un jeu de développement mis de côté composé de
 gardes conditionnelles, de copies de variables et de nettoyages (aucun des trois n'a été entraîné dessus), la part
-d'appels autorisés alors qu'ils devaient être bloqués était de 43.75% pour standard, 1.88% pour JEV et 100% pour
+d'appels autorisés alors qu'ils devaient être bloqués était de 43.75% pour `vulcan-decision-shell-v1`, 1.88% pour JEV et 100% pour
 Alibaba Cloud ; la part d'appels inoffensifs mais bloqués était de 15.36%, 4.82% et 0%. Sur les types de questions
 que nous ne couvrons pas encore, JEV est nettement meilleur que nous.
 
@@ -343,13 +343,13 @@ runtime prêt à l'emploi (AMD, Intel, Apple) utilisent un pack CPU ou le cloud.
 votre pilote et sa capacité de calcul, et suggèrent un pack ; les utilisateurs de Chine continentale peuvent choisir
 la source de téléchargement par miroir chinois.
 
-`vulcan-decision-shell` v1 existe en trois tailles, disponibles à la fois dans le cloud et en local :
+`vulcan-decision-shell-v1` existe en trois tailles, disponibles à la fois dans le cloud et en local :
 
-| Taille | Paramètres | Remarques |
-| --- | --- | --- |
-| mini | 0.2B | Par défaut dans le cloud |
-| flash | 0.35B | |
-| standard | 0.8B | Le modèle évalué ci-dessus |
+| Taille | Modèle | Paramètres | Remarques |
+| --- | --- | --- | --- |
+| mini | `vulcan-decision-shell-v1-mini` | 0.2B | Par défaut dans le cloud |
+| flash | `vulcan-decision-shell-v1-flash` | 0.35B | |
+| standard | `vulcan-decision-shell-v1` | 0.8B | Le modèle évalué ci-dessus ; basé sur Qwen3.5-0.8B-Base |
 
 ## 🔒 Enregistrements de décisions et confidentialité
 
@@ -412,6 +412,10 @@ Vulcan Decision Guard repose sur les projets open source ci-dessous. Merci à le
 **Outils de développement**
 
 - [TypeScript](https://www.typescriptlang.org/), [pnpm](https://pnpm.io/) et [uv](https://github.com/astral-sh/uv) pour générer les fichiers de verrouillage des paquets d'exécution
+
+**Modèle**
+
+- [Qwen3.5-0.8B-Base](https://huggingface.co/Qwen/Qwen3.5-0.8B-Base) : le modèle de base de `vulcan-decision-shell-v1`
 
 **Communauté**
 

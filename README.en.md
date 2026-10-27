@@ -222,8 +222,7 @@ indefinitely.
 
 ## 📊 Evaluation
 
-In October 2026 we ran a one-off comparison on a single frozen question bank between `vulcan-decision-shell` v1
-**standard (0.8B)** and two external decision services: JEV 1.14.0 and Alibaba Cloud's decision model
+In October 2026 we ran a one-off comparison on a single frozen question bank between **`vulcan-decision-shell-v1`** (0.8B) and two external decision services: JEV 1.14.0 and Alibaba Cloud's decision model
 `decision-model-preview`. All three used the same fixed English policy, the same complete tool arguments, project
 folder and fixed authorization options, with no task description; the highest-scoring decision was taken and no
 thresholds were tuned.
@@ -233,14 +232,14 @@ First, the limits of these numbers:
 - The labeled questions come from our own training and test bank, and **a large share of them are questions we
   trained on**, which clearly favors us;
 - The reference labels are ours; they are not absolute truth for production;
-- The numbers are for standard (0.8B) only. The default cloud mini (0.2B) and flash (0.35B) perform differently and
+- The numbers are for `vulcan-decision-shell-v1` only. The default cloud `vulcan-decision-shell-v1-mini` (0.2B) and `vulcan-decision-shell-v1-flash` (0.35B) perform differently and
   are not represented here;
 - External results reflect the versions available at the time. Alibaba Cloud's service alias does not let us check
   which weights are behind it.
 
 **Labeled bank (106,501 inputs)**
 
-| Metric | standard (0.8B) | JEV 1.14.0 | Alibaba Cloud |
+| Metric | `vulcan-decision-shell-v1` | JEV 1.14.0 | Alibaba Cloud |
 | --- | --- | --- | --- |
 | Routine work allowed directly (higher is better) | 99.07% | 73.10% | 96.60% |
 | Allowed although it needed review (lower is better) | 2.40% | 17.03% | 90.92% |
@@ -254,7 +253,7 @@ whether the decisions were right.
 
 **Question types we have not trained on**: on a development holdout of conditional guards, variable copies and
 cleanups (none of the three trained on it), the share allowed although it should be blocked was 43.75% for
-standard, 1.88% for JEV and 100% for Alibaba Cloud; harmless but blocked was 15.36%, 4.82% and 0%. On question types
+`vulcan-decision-shell-v1`, 1.88% for JEV and 100% for Alibaba Cloud; harmless but blocked was 15.36%, 4.82% and 0%. On question types
 we do not cover yet, JEV is clearly better than we are.
 
 How to read these numbers:
@@ -317,13 +316,13 @@ Runtime packs are a prebuilt Python plus official wheels, and every file is chec
 Apple) use a CPU pack or the cloud. Settings detect your GPU, driver and compute capability and suggest a pack;
 users in mainland China can pick the China mirror download source.
 
-`vulcan-decision-shell` v1 comes in three sizes, available both in the cloud and locally:
+`vulcan-decision-shell-v1` comes in three sizes, available both in the cloud and locally:
 
-| Size | Parameters | Notes |
-| --- | --- | --- |
-| mini | 0.2B | Cloud default |
-| flash | 0.35B | |
-| standard | 0.8B | The model evaluated above |
+| Size | Model | Parameters | Notes |
+| --- | --- | --- | --- |
+| mini | `vulcan-decision-shell-v1-mini` | 0.2B | Cloud default |
+| flash | `vulcan-decision-shell-v1-flash` | 0.35B | |
+| standard | `vulcan-decision-shell-v1` | 0.8B | The model evaluated above; based on Qwen3.5-0.8B-Base |
 
 ## 🔒 Decision records and privacy
 
@@ -382,6 +381,10 @@ Vulcan Decision Guard is built on the open-source projects below. Thanks to thei
 **Development tools**
 
 - [TypeScript](https://www.typescriptlang.org/), [pnpm](https://pnpm.io/), and [uv](https://github.com/astral-sh/uv) for generating the runtime pack locks
+
+**Model**
+
+- [Qwen3.5-0.8B-Base](https://huggingface.co/Qwen/Qwen3.5-0.8B-Base): the base model of `vulcan-decision-shell-v1`
 
 **Community**
 

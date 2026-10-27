@@ -237,7 +237,7 @@ Antwort zu warten.
 ## 📊 Auswertung
 
 Im Oktober 2026 haben wir einen einmaligen Vergleich auf einer einzigen eingefrorenen Fragensammlung durchgeführt:
-`vulcan-decision-shell` v1 **standard (0.8B)** gegen zwei externe Entscheidungsdienste, JEV 1.14.0 und das
+**`vulcan-decision-shell-v1`** (0.8B) gegen zwei externe Entscheidungsdienste, JEV 1.14.0 und das
 Entscheidungsmodell von Alibaba Cloud `decision-model-preview`. Alle drei erhielten dieselbe feste englische
 Richtlinie, dieselben vollständigen Tool-Argumente, denselben Projektordner und dieselben festen
 Freigabeoptionen, ohne Aufgabenbeschreibung; es wurde die Entscheidung mit der höchsten Bewertung genommen, und
@@ -248,14 +248,14 @@ Zuerst die Grenzen dieser Zahlen:
 - Die gelabelten Fragen stammen aus unserer eigenen Trainings- und Testsammlung, und **ein großer Teil davon sind
   Fragen, auf die wir trainiert haben**, was uns klar begünstigt;
 - Die Referenzlabels stammen von uns; sie sind keine absolute Wahrheit für die Produktion;
-- Die Zahlen gelten nur für standard (0.8B). Das Cloud-Standardmodell mini (0.2B) und flash (0.35B) verhalten sich
+- Die Zahlen gelten nur für `vulcan-decision-shell-v1`. Das Cloud-Standardmodell `vulcan-decision-shell-v1-mini` (0.2B) und `vulcan-decision-shell-v1-flash` (0.35B) verhalten sich
   anders und sind hier nicht vertreten;
 - Externe Ergebnisse spiegeln die damals verfügbaren Versionen wider. Über den Dienst-Alias von Alibaba Cloud
   können wir nicht prüfen, welche Gewichte dahinterstehen.
 
 **Gelabelte Sammlung (106,501 Eingaben)**
 
-| Kennzahl | standard (0.8B) | JEV 1.14.0 | Alibaba Cloud |
+| Kennzahl | `vulcan-decision-shell-v1` | JEV 1.14.0 | Alibaba Cloud |
 | --- | --- | --- | --- |
 | Routinearbeit direkt erlaubt (höher ist besser) | 99.07% | 73.10% | 96.60% |
 | Erlaubt, obwohl Prüfung nötig war (niedriger ist besser) | 2.40% | 17.03% | 90.92% |
@@ -269,7 +269,7 @@ ob die Entscheidungen richtig waren.
 
 **Fragetypen, auf die wir nicht trainiert haben**: Bei einem Entwicklungs-Holdout aus bedingten Schutzprüfungen,
 Variablenkopien und Aufräumvorgängen (keiner der drei darauf trainiert) lag der Anteil „erlaubt, obwohl
-blockiert werden sollte“ bei 43.75% für standard, 1.88% für JEV und 100% für Alibaba Cloud; „harmlos, aber
+blockiert werden sollte“ bei 43.75% für `vulcan-decision-shell-v1`, 1.88% für JEV und 100% für Alibaba Cloud; „harmlos, aber
 blockiert“ lag bei 15.36%, 4.82% und 0%. Bei Fragetypen, die wir noch nicht abdecken, ist JEV deutlich besser als
 wir.
 
@@ -340,13 +340,13 @@ fertige Runtime (AMD, Intel, Apple) nutzen ein CPU-Pack oder die Cloud. Die Eins
 Treiber und die Compute Capability und schlagen ein Pack vor; Nutzer in Festlandchina können die
 China-Spiegel-Downloadquelle wählen.
 
-`vulcan-decision-shell` v1 gibt es in drei Größen, sowohl in der Cloud als auch lokal verfügbar:
+`vulcan-decision-shell-v1` gibt es in drei Größen, sowohl in der Cloud als auch lokal verfügbar:
 
-| Größe | Parameter | Hinweise |
-| --- | --- | --- |
-| mini | 0.2B | Cloud-Standard |
-| flash | 0.35B | |
-| standard | 0.8B | Das oben ausgewertete Modell |
+| Größe | Modell | Parameter | Hinweise |
+| --- | --- | --- | --- |
+| mini | `vulcan-decision-shell-v1-mini` | 0.2B | Cloud-Standard |
+| flash | `vulcan-decision-shell-v1-flash` | 0.35B | |
+| standard | `vulcan-decision-shell-v1` | 0.8B | Das oben ausgewertete Modell; basiert auf Qwen3.5-0.8B-Base |
 
 ## 🔒 Entscheidungsprotokolle und Datenschutz
 
@@ -408,6 +408,10 @@ Vulcan Decision Guard baut auf den folgenden Open-Source-Projekten auf. Danke an
 **Entwicklungswerkzeuge**
 
 - [TypeScript](https://www.typescriptlang.org/), [pnpm](https://pnpm.io/) und [uv](https://github.com/astral-sh/uv) zum Erzeugen der Lock-Dateien der Laufzeitpakete
+
+**Modell**
+
+- [Qwen3.5-0.8B-Base](https://huggingface.co/Qwen/Qwen3.5-0.8B-Base): das Basismodell von `vulcan-decision-shell-v1`
 
 **Community**
 
