@@ -41,6 +41,7 @@ if (plugin.dependencies?.[ENGINE_NAME] === undefined) throw new Error(`the plugi
 
 // The plugin, as its own `files` list publishes it.
 copy(path.join(PLUGIN, 'lib'), path.join(STAGE, 'lib'))
+copy(path.join(PLUGIN, 'assets'), path.join(STAGE, 'assets'))
 fs.copyFileSync(path.join(PLUGIN, 'cordis.patch.yml'), path.join(STAGE, 'cordis.patch.yml'))
 fs.copyFileSync(path.join(PLUGIN, 'README.md'), path.join(STAGE, 'README.md'))
 fs.copyFileSync(path.join(ROOT, 'LICENSE'), path.join(STAGE, 'LICENSE'))

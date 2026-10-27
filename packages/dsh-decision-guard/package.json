@@ -3,6 +3,7 @@
   "version": "0.2.1",
   "description": "Vulcan Decision permission guard for DeepSeek Harness: every tool call is judged before it runs.",
   "license": "MIT",
+  "icon": "./assets/openvulcan-icon.svg",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/OpenVulcan/vulcan-decision-guard.git",
@@ -23,6 +24,7 @@
   "files": [
     "lib",
     "!lib/**/*.test.*",
+    "assets",
     "cordis.patch.yml"
   ],
   "scripts": {
