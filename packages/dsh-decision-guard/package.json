@@ -1,6 +1,6 @@
 {
   "name": "@openvulcan/dsh-decision-guard",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Vulcan Decision permission guard for DeepSeek Harness: every tool call is judged before it runs.",
   "license": "MIT",
   "repository": {

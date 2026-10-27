@@ -129,6 +129,30 @@ body[data-ds-dark-theme] .vdg {
 .vdg-facts dt { color: var(--vk-ink-3); font-size: 12px; }
 .vdg-facts dd { margin: 2px 0 0; overflow-wrap: anywhere; }
 .vdg-details summary { cursor: pointer; color: var(--vk-ink-2); font-size: 12px; }
+.vdg-dialog.md { width: min(34rem, 100%); }
+.vdg-between > .vdg-hint:last-child { font-variant-numeric: tabular-nums; }
+
+.vdg-chip { display: inline-flex; align-items: center; height: 24px; padding: 0 10px; border: 1px solid var(--vk-line); background: var(--vk-panel); color: var(--vk-ink-2); font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
+.vdg-chip:hover:not(:disabled) { background: var(--vk-hover); }
+.vdg-chip[aria-pressed="true"] { border-color: var(--vk-signal); background: var(--vk-select); color: var(--vk-ink); }
+.vdg-chip:disabled { cursor: default; opacity: .55; }
+.vdg-chip:focus-visible { outline: 2px solid var(--vk-signal); outline-offset: 1px; }
+.vdg-record { display: flex; flex-direction: column; gap: 6px; padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 4); border-bottom: 1px solid var(--vk-line-soft); border-left: 3px solid var(--tone, var(--vk-line)); }
+.vdg-record:last-child { border-bottom: 0; }
+.vdg-record.ok { --tone: var(--vk-ok); }
+.vdg-record.warn { --tone: var(--vk-warn); }
+.vdg-record.bad { --tone: var(--vk-bad); }
+.vdg-record-title { font-family: var(--vk-mono); font-size: 12px; overflow-wrap: anywhere; }
+.vdg-record-filters { display: flex; flex-direction: column; gap: 8px; padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 4); border-bottom: 1px solid var(--vk-line); }
+.vdg-record-more { display: flex; justify-content: center; padding: calc(var(--vk-u) * 3); border-top: 1px solid var(--vk-line-soft); }
+.vdg-entry { display: flex; flex-direction: column; gap: 1px; width: 100%; padding: 6px 8px; margin: 0 -8px; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.vdg-entry:hover:not(:disabled) { background: var(--vk-hover); }
+.vdg-entry:disabled { cursor: default; opacity: .55; }
+.vdg-entry-title { font-weight: 500; }
+.vdg-entry-hint { color: var(--vk-ink-3); font-size: 12px; }
+.vdg-group-label { display: flex; flex-direction: column; gap: 1px; }
+.vdg-group-label strong { font-size: 12px; font-weight: 600; color: var(--vk-ink-2); }
+.vdg-separator { height: 1px; margin: 2px 0; background: var(--vk-line-soft); }
 
 .vdg-popover { position: fixed; z-index: 1150; width: min(340px, calc(100vw - 24px)); border: 1px solid var(--vk-line-strong); background: var(--vk-panel); box-shadow: var(--vk-shadow-2); }
 .vdg-popover::before { content: ""; position: absolute; left: -1px; top: -1px; width: calc(var(--vk-u) * 7); height: 2px; background: var(--vk-ember); }

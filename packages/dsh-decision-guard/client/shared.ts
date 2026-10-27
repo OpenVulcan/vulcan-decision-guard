@@ -33,6 +33,9 @@ export interface GuardSettings {
   readonly crossProjectWrites: 'allow' | 'review'
   readonly databaseReset: 'confirm' | 'allow'
   readonly projectReset: 'confirm' | 'allow'
+  readonly reviewPrompt: string
+  readonly unattendedPolicy: string
+  readonly recordDecisions: boolean
 }
 
 export type Field = keyof GuardSettings
@@ -43,6 +46,63 @@ export type Change = Partial<Record<Field, string | number | boolean | undefined
 export const DEFAULT_ASK_TIMEOUT = 60
 /** Mirrors `MAX_ASK_TIMEOUT` in `src/index.ts`. */
 export const MAX_ASK_TIMEOUT = 3600
+/** Mirrors `MAX_PROMPT_CHARS` in `src/session-state.ts`. */
+export const MAX_PROMPT_CHARS = 4000
+
+export type Decision = 'allow' | 'review' | 'block'
+export const DECISIONS: readonly Decision[] = ['allow', 'review', 'block']
+
+/** Mirrors `DecisionRecord` in `src/records.ts`. */
+export interface DecisionRecord {
+  readonly id: string
+  readonly judgedAtMs: number
+  readonly sessionId: string
+  readonly workspaceRoot?: string
+  readonly toolName: string
+  readonly arguments: string
+  readonly attended: boolean
+  readonly judge: {
+    readonly label?: Decision
+    readonly error?: string
+    readonly reasonCode?: string
+    readonly elapsedMs: number
+    readonly trace?: {
+      readonly backend: 'cloud' | 'local'
+      readonly model: string
+      readonly via?: string
+      readonly policyVersion: string
+      readonly rendered: string
+      readonly logits?: readonly number[]
+      readonly inputTokens?: number
+    }
+  }
+  readonly review?: {
+    readonly verdict?: 'allow' | 'review' | 'deny' | 'forbid'
+    readonly reason?: string
+    readonly error?: string
+    readonly elapsedMs: number
+  }
+  readonly outcome: string
+  readonly correction?: Decision
+}
+
+/** Mirrors `RecordPage` in `src/records.ts`. */
+export interface RecordPage {
+  readonly records: readonly DecisionRecord[]
+  readonly hasMore: boolean
+  readonly total: number
+  readonly marked: number
+  readonly workspaces: readonly string[]
+  readonly retentionRecords: number
+  readonly retentionDays: number
+}
+
+/** Mirrors `RecordExport` in `src/records.ts`. */
+export interface RecordExport {
+  readonly fileName: string
+  readonly content: string
+  readonly count: number
+}
 
 /** Mirrors `EndpointSnapshot` in the engine's `cloud/edge.ts`. */
 export interface EndpointSnapshot {

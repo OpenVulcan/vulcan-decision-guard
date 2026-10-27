@@ -1,34 +1,47 @@
 /**
  * The composer's quick setting, left of the model selector: a pill with the guard's state that
- * opens a card for the settings changed most often, and this session's unattended switch.
- * Everything else stays in Settings › Auto approval, one click away.
+ * opens a card after VulcanCode's auto approval menu. It holds the category grants, this
+ * session's additional review prompt and unattended mode, each edited in its own dialog, and the
+ * settings changed most often. Everything else stays in Settings › Auto approval, one click away.
  */
 
 import { useCallback, useRef, useState } from 'react'
 
-import { fill, type Translate } from './i18n'
+import { fill, type Key, type Translate } from './i18n'
 import { lockEndpoint } from './cloud'
 import { decisionStatus } from './settings'
-import { AUTO_PRESET, DEFAULT_ASK_TIMEOUT, type Services } from './shared'
-import { ErrorLine, Popover, Segments, useAction, useSettings, useWatch } from './ui'
+import { AUTO_PRESET, DEFAULT_ASK_TIMEOUT, MAX_PROMPT_CHARS, messageOf, type GuardSettings, type Services } from './shared'
+import { Dialog, ErrorLine, Popover, Segments, useAction, useSettings, useWatch } from './ui'
 import type { SessionSlotProps } from './dsh-client'
 
-/** Mirrors `PROJECTION_KEY` and `GuardSessionView` in `src/unattended.ts`. */
+/** Mirrors `PROJECTION_KEY` and `GuardSessionView` in `src/session-state.ts`. */
 export const PROJECTION_KEY = 'vulcanDecision'
 interface GuardSessionView {
   readonly unattended: boolean
+  readonly denyPolicy: string
+  /** null: the session follows the system default. */
+  readonly reviewPrompt: string | null
 }
 
 /** Countdowns offered in the card; a saved value outside them is listed as well. */
 const TIMEOUTS = [0, 30, DEFAULT_ASK_TIMEOUT, 120, 300] as const
 
+/** The category grants a checkbox can express: checked lets the decision model allow the category. */
+const CATEGORIES: readonly { field: 'crossProjectWrites' | 'databaseReset' | 'projectReset'; withheld: string; label: Key }[] = [
+  { field: 'crossProjectWrites', withheld: 'review', label: 'quick.category.crossProjectWrites' },
+  { field: 'databaseReset', withheld: 'confirm', label: 'quick.category.databaseReset' },
+  { field: 'projectReset', withheld: 'confirm', label: 'quick.category.projectReset' },
+]
+
 export interface QuickInjected {
   readonly services: Services
-  /** Switch the session through the Host command; rejects when the Host does not accept it. */
-  readonly toggleUnattended: (unattended: boolean) => Promise<void>
+  /** Turn unattended mode on with a deny policy, or off with null; rejects when the Host does not accept it. */
+  readonly setUnattended: (policy: string | null) => Promise<void>
+  /** Give the session its own review prompt, or follow the system default with null. */
+  readonly setReviewPrompt: (prompt: string | null) => Promise<void>
 }
 
-export function QuickSetting({ useProjection, t: translate, services, toggleUnattended }: SessionSlotProps & QuickInjected) {
+export function QuickSetting({ useProjection, t: translate, services, setUnattended, setReviewPrompt }: SessionSlotProps & QuickInjected) {
   const t = translate as Translate
   const view = useProjection(PROJECTION_KEY) as GuardSessionView | undefined
   const permissions = useProjection('permissions') as { readonly currentValue?: string } | undefined
@@ -72,8 +85,9 @@ export function QuickSetting({ useProjection, t: translate, services, toggleUnat
               t={t}
               services={services}
               governed={governed}
-              unattended={view === undefined ? undefined : unattended}
-              toggleUnattended={toggleUnattended}
+              view={view}
+              setUnattended={setUnattended}
+              setReviewPrompt={setReviewPrompt}
               decision={decision.text}
               onMore={() => {
                 close()
@@ -87,13 +101,14 @@ export function QuickSetting({ useProjection, t: translate, services, toggleUnat
   )
 }
 
-function QuickCard({ t, services, governed, unattended, toggleUnattended, decision, onMore }: {
+function QuickCard({ t, services, governed, view, setUnattended, setReviewPrompt, decision, onMore }: {
   t: Translate
   services: Services
   governed: boolean
   /** undefined: the session publishes no guard view (not materialized yet). */
-  unattended: boolean | undefined
-  toggleUnattended: (unattended: boolean) => Promise<void>
+  view: GuardSessionView | undefined
+  setUnattended: QuickInjected['setUnattended']
+  setReviewPrompt: QuickInjected['setReviewPrompt']
   decision: string
   onMore: () => void
 }) {
@@ -101,8 +116,7 @@ function QuickCard({ t, services, governed, unattended, toggleUnattended, decisi
   const live = useWatch(services.panel)
   const endpoints = useWatch(services.endpoints)
   const { busy, error, act } = useAction(() => { services.endpoints.refresh() })
-  const [switching, setSwitching] = useState<boolean | undefined>(undefined)
-  const [switchFailed, setSwitchFailed] = useState(false)
+  const [editing, setEditing] = useState<'review-prompt' | 'unattended' | undefined>(undefined)
   const value = settings.value
   if (value === undefined) return null
   const { disabled, save } = settings
@@ -110,7 +124,7 @@ function QuickCard({ t, services, governed, unattended, toggleUnattended, decisi
   const timeouts: number[] = TIMEOUTS.includes(value.askTimeout as typeof TIMEOUTS[number]) ? [...TIMEOUTS] : [...TIMEOUTS, value.askTimeout].sort((a, b) => a - b)
   const locked = endpoints?.lockedEndpointId
   const rows = endpoints?.endpoints ?? []
-  const checked = switching ?? unattended === true
+  const unattended = view?.unattended === true
   return (
     <>
       <div className="vdg-popover-head">
@@ -118,6 +132,49 @@ function QuickCard({ t, services, governed, unattended, toggleUnattended, decisi
       </div>
       <div className="vdg-popover-body">
         <p className="vdg-hint">{governed ? t('quick.governed') : t('quick.notGoverned')}</p>
+        <div className="vdg-group-label">
+          <strong>{t('quick.categories')}</strong>
+          <span className="vdg-hint">{t('quick.categoriesHint')}</span>
+        </div>
+        {CATEGORIES.map(category => (
+          <label key={category.field} className="vdg-check" data-category={category.field}>
+            <input
+              type="checkbox"
+              checked={value[category.field] === 'allow'}
+              disabled={disabled}
+              onChange={(event) => { save({ [category.field]: event.target.checked ? 'allow' : category.withheld }) }}
+            />
+            <span>{t(category.label)}</span>
+          </label>
+        ))}
+        {governed
+          ? (
+            <>
+              <div className="vdg-separator" />
+              <button
+                type="button"
+                className="vdg-entry"
+                data-review-prompt-entry=""
+                disabled={view === undefined}
+                onClick={() => { setEditing('review-prompt') }}
+              >
+                <span className="vdg-entry-title">{t('quick.reviewPrompt')}</span>
+                <span className="vdg-entry-hint">{t(view === undefined ? 'quick.draftHint' : 'quick.reviewPrompt.hint')}</span>
+              </button>
+              <button
+                type="button"
+                className="vdg-entry"
+                data-unattended-entry={unattended ? 'on' : 'off'}
+                disabled={view === undefined}
+                onClick={() => { setEditing('unattended') }}
+              >
+                <span className="vdg-entry-title">{t(unattended ? 'quick.unattendedOn' : 'quick.unattendedOff')}</span>
+                <span className="vdg-entry-hint">{t(view === undefined ? 'quick.draftHint' : 'quick.unattendedHint')}</span>
+              </button>
+            </>
+          )
+          : null}
+        <div className="vdg-separator" />
         <div className="vdg-popover-row">
           <span>{t('quick.backend')}</span>
           <Segments
@@ -186,37 +243,163 @@ function QuickCard({ t, services, governed, unattended, toggleUnattended, decisi
             ))}
           </select>
         </div>
-        {governed && unattended !== undefined
-          ? (
-            <label className="vdg-check">
-              <input
-                type="checkbox"
-                checked={checked}
-                disabled={switching !== undefined}
-                onChange={(event) => {
-                  const next = event.target.checked
-                  setSwitching(next)
-                  setSwitchFailed(false)
-                  toggleUnattended(next).then(() => { setSwitching(undefined) }, () => {
-                    setSwitching(undefined)
-                    setSwitchFailed(true)
-                  })
-                }}
-              />
-              <span>
-                <span className="vdg-choice-title">{t('quick.unattended')}</span>
-                <span className="vdg-choice-hint">{t('quick.unattendedHint')}</span>
-              </span>
-            </label>
-          )
-          : null}
-        <ErrorLine text={switchFailed ? t('unattended.failed') : undefined} />
         <ErrorLine text={error ?? settings.error} />
       </div>
       <div className="vdg-popover-foot">
         <span className="vdg-hint" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={decision}>{decision}</span>
         <button type="button" className="vdg-link" onClick={onMore}>{t('quick.more')} →</button>
       </div>
+      {editing === 'review-prompt' && view !== undefined
+        ? <ReviewPromptDialog t={t} view={view} value={value} onSave={setReviewPrompt} onClose={() => { setEditing(undefined) }} />
+        : null}
+      {editing === 'unattended' && view !== undefined
+        ? <UnattendedDialog t={t} view={view} value={value} onApply={setUnattended} onClose={() => { setEditing(undefined) }} />
+        : null}
     </>
+  )
+}
+
+/** A textarea with its label, where its text comes from, and a counter against the Host's limit. */
+function PromptField({ t, label, source, placeholder, text, onChange }: {
+  t: Translate
+  label: string
+  source: string | undefined
+  placeholder: string
+  text: string
+  onChange: (text: string) => void
+}) {
+  return (
+    <div className="vdg-field">
+      <div className="vdg-between">
+        <span className="vdg-label">{label}</span>
+        {source === undefined ? null : <span className="vdg-hint">{source}</span>}
+      </div>
+      <textarea
+        className="vdg-textarea"
+        aria-label={label}
+        rows={4}
+        maxLength={MAX_PROMPT_CHARS}
+        placeholder={placeholder}
+        value={text}
+        onChange={(event) => { onChange(event.target.value) }}
+      />
+      <span className="vdg-hint" style={{ alignSelf: 'flex-end', fontVariantNumeric: 'tabular-nums' }}>
+        {fill(t('dialog.counter'), { count: text.length, max: MAX_PROMPT_CHARS })}
+      </span>
+    </div>
+  )
+}
+
+/**
+ * This session's additional review prompt: the text the reviewer reads while the user is present.
+ * The session follows the system default until it saves its own text, and can return to it.
+ */
+function ReviewPromptDialog({ t, view, value, onSave, onClose }: {
+  t: Translate
+  view: GuardSessionView
+  value: GuardSettings
+  onSave: QuickInjected['setReviewPrompt']
+  onClose: () => void
+}) {
+  const saved = view.reviewPrompt ?? value.reviewPrompt
+  const custom = view.reviewPrompt !== null
+  const [text, setText] = useState(saved)
+  const [saving, setSaving] = useState(false)
+  const [failure, setFailure] = useState<string | undefined>(undefined)
+  const save = (prompt: string | null): void => {
+    setSaving(true)
+    setFailure(undefined)
+    onSave(prompt).then(onClose, (error: unknown) => {
+      setFailure(fill(t('reviewPrompt.saveFailed'), { error: messageOf(error) }))
+    }).finally(() => { setSaving(false) })
+  }
+  return (
+    <Dialog
+      title={t('reviewPrompt.title')}
+      size="md"
+      onClose={onClose}
+      footer={(
+        <>
+          <button type="button" className="vdg-btn" onClick={onClose}>{t('dialog.cancel')}</button>
+          {custom ? <button type="button" className="vdg-btn" disabled={saving} onClick={() => { save(null) }}>{t('reviewPrompt.followSystem')}</button> : null}
+          <button
+            type="button"
+            className="vdg-btn primary"
+            disabled={saving || text.length > MAX_PROMPT_CHARS || text.trim() === saved}
+            onClick={() => { save(text.trim()) }}
+          >
+            {t('reviewPrompt.save')}
+          </button>
+        </>
+      )}
+    >
+      <p className="vdg-hint">{t('reviewPrompt.body')}</p>
+      {value.review === 'off' ? <div className="vdg-alert warn">{t('quick.reviewOff')}</div> : null}
+      <PromptField
+        t={t}
+        label={t('reviewPrompt.label')}
+        source={t(custom ? 'reviewPrompt.sourceSession' : 'reviewPrompt.sourceSystem')}
+        placeholder={t('reviewPrompt.placeholder')}
+        text={text}
+        onChange={setText}
+      />
+      <ErrorLine text={failure} />
+    </Dialog>
+  )
+}
+
+/**
+ * Turn unattended mode on with a deny policy the user confirms, edit the policy, or turn it off.
+ * The policy is prefilled from the system default; nothing applies until the user confirms.
+ */
+function UnattendedDialog({ t, view, value, onApply, onClose }: {
+  t: Translate
+  view: GuardSessionView
+  value: GuardSettings
+  onApply: QuickInjected['setUnattended']
+  onClose: () => void
+}) {
+  const enabled = view.unattended
+  const [text, setText] = useState(enabled ? view.denyPolicy : value.unattendedPolicy)
+  const [saving, setSaving] = useState(false)
+  const [failure, setFailure] = useState<string | undefined>(undefined)
+  const apply = (policy: string | null): void => {
+    setSaving(true)
+    setFailure(undefined)
+    onApply(policy).then(onClose, (error: unknown) => {
+      setFailure(fill(t('unattended.failed'), { error: messageOf(error) }))
+    }).finally(() => { setSaving(false) })
+  }
+  return (
+    <Dialog
+      title={t(enabled ? 'unattended.editTitle' : 'unattended.enableTitle')}
+      size="md"
+      onClose={onClose}
+      footer={(
+        <>
+          <button type="button" className="vdg-btn" onClick={onClose}>{t('dialog.cancel')}</button>
+          {enabled ? <button type="button" className="vdg-btn" disabled={saving} onClick={() => { apply(null) }}>{t('unattended.disable')}</button> : null}
+          <button
+            type="button"
+            className="vdg-btn primary"
+            disabled={saving || text.length > MAX_PROMPT_CHARS}
+            onClick={() => { apply(text.trim()) }}
+          >
+            {t(enabled ? 'unattended.update' : 'unattended.enable')}
+          </button>
+        </>
+      )}
+    >
+      <p className="vdg-hint">{t('unattended.body')}</p>
+      <PromptField
+        t={t}
+        label={t('unattended.policyLabel')}
+        source={!enabled && value.unattendedPolicy !== '' ? t('unattended.sourceSystem') : undefined}
+        placeholder={t('unattended.placeholder')}
+        text={text}
+        onChange={setText}
+      />
+      <ErrorLine text={failure} />
+    </Dialog>
   )
 }

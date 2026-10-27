@@ -162,8 +162,10 @@ export function useSettings(form: ConfigForm<GuardSettings>, t: Translate) {
 }
 
 /** A modal dialog over the page, closed by Escape, the scrim or its own controls. */
-export function Dialog({ title, onClose, footer, children }: {
+export function Dialog({ title, size, onClose, footer, children }: {
   title: string
+  /** `md` for short forms; wide by default. */
+  size?: 'md'
   onClose: () => void
   footer: ReactNode
   children: ReactNode
@@ -181,7 +183,7 @@ export function Dialog({ title, onClose, footer, children }: {
   }, [onClose])
   return createPortal(
     <div className="vdg vdg-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
-      <div className="vdg-dialog" role="dialog" aria-modal="true" aria-label={title}>
+      <div className={size === 'md' ? 'vdg-dialog md' : 'vdg-dialog'} role="dialog" aria-modal="true" aria-label={title}>
         <div className="vdg-dialog-head">
           <h3>{title}</h3>
           <button type="button" className="vdg-btn ghost sm" aria-label="×" onClick={onClose}>×</button>

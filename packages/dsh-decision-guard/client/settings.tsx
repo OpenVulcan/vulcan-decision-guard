@@ -1,7 +1,8 @@
 /**
  * Settings › Auto approval: the whole configuration of the plugin as numbered Vulcan sections.
- * Every control saves on its own as soon as it changes; only the review rules, being free text,
- * are saved together with a button.
+ * Every control saves on its own as soon as it changes; only the review rules and the additional
+ * prompts, being free text, are saved together with a button. The decision log opens in place of
+ * the page.
  */
 
 import { useEffect, useState } from 'react'
@@ -9,8 +10,9 @@ import { useEffect, useState } from 'react'
 import { fill, type Key, type Translate } from './i18n'
 import { AccountSection, EndpointsSection, lockEndpoint, ModelSection } from './cloud'
 import { LocalSections } from './local'
+import { RecordsPage } from './records'
 import {
-  callPanel, DEFAULT_ASK_TIMEOUT, MAX_ASK_TIMEOUT, running, type GuardSettings, type PanelState, type Services,
+  callPanel, DEFAULT_ASK_TIMEOUT, MAX_ASK_TIMEOUT, MAX_PROMPT_CHARS, running, type GuardSettings, type PanelState, type Services,
 } from './shared'
 import { Badge, Choices, ErrorLine, Section, Segments, useAction, usePolling, useSettings, useWatch, type Tone } from './ui'
 
@@ -215,6 +217,80 @@ function RulesSection({ t, value, disabled, saveAsync }: {
   )
 }
 
+type PromptField = 'reviewPrompt' | 'unattendedPolicy'
+const PROMPTS: readonly { field: PromptField; key: 'review' | 'unattended'; placeholder: Key }[] = [
+  { field: 'reviewPrompt', key: 'review', placeholder: 'reviewPrompt.placeholder' },
+  { field: 'unattendedPolicy', key: 'unattended', placeholder: 'unattended.placeholder' },
+]
+
+/** The system defaults of the review prompt and the unattended deny policy. */
+function PromptsSection({ t, value, disabled, saveAsync }: {
+  t: Translate
+  value: GuardSettings
+  disabled: boolean
+  saveAsync: ReturnType<typeof useSettings>['saveAsync']
+}) {
+  const [draft, setDraft] = useState<Partial<Record<PromptField, string>>>({})
+  const text = (field: PromptField): string => draft[field] ?? value[field]
+  const dirty = PROMPTS.some(prompt => draft[prompt.field] !== undefined && draft[prompt.field] !== value[prompt.field])
+  const tooLong = PROMPTS.some(prompt => text(prompt.field).length > MAX_PROMPT_CHARS)
+  return (
+    <Section title={t('prompts.title')} lead={t('prompts.lead')}>
+      {PROMPTS.map(prompt => (
+        <div key={prompt.field} className="vdg-field">
+          <span className="vdg-label">{t(`prompts.${prompt.key}`)}</span>
+          <span className="vdg-hint">{t(`prompts.${prompt.key}.hint`)}</span>
+          <textarea
+            className="vdg-textarea"
+            aria-label={t(`prompts.${prompt.key}`)}
+            rows={3}
+            value={text(prompt.field)}
+            placeholder={t(prompt.placeholder)}
+            disabled={disabled}
+            onChange={(event) => { setDraft(staged => ({ ...staged, [prompt.field]: event.target.value })) }}
+          />
+          <span className="vdg-hint" style={{ alignSelf: 'flex-end', fontVariantNumeric: 'tabular-nums' }}>
+            {fill(t('dialog.counter'), { count: text(prompt.field).length, max: MAX_PROMPT_CHARS })}
+          </span>
+        </div>
+      ))}
+      <div className="vdg-inline" style={{ justifyContent: 'flex-end' }}>
+        <button type="button" className="vdg-btn" disabled={!dirty || disabled} onClick={() => { setDraft({}) }}>{t('rules.discard')}</button>
+        <button
+          type="button"
+          className="vdg-btn primary"
+          disabled={!dirty || disabled || tooLong}
+          onClick={() => {
+            const changes = Object.fromEntries(Object.entries(draft).map(([field, next]) => [field, next.trim()]))
+            void saveAsync(changes).then((landed) => { if (landed) setDraft({}) })
+          }}
+        >
+          {t('prompts.save')}
+        </button>
+      </div>
+    </Section>
+  )
+}
+
+/** The decision log switch and the way into the log. */
+function RecordsSection({ t, value, disabled, save, onOpen }: { t: Translate; value: GuardSettings; disabled: boolean; save: Save; onOpen: () => void }) {
+  return (
+    <Section
+      title={t('records.title')}
+      lead={t('records.entryHint')}
+      actions={<button type="button" className="vdg-btn sm" onClick={onOpen}>{t('records.open')} →</button>}
+    >
+      <label className="vdg-check">
+        <input type="checkbox" checked={value.recordDecisions} disabled={disabled} onChange={(event) => { save({ recordDecisions: event.target.checked }) }} />
+        <span>
+          <span className="vdg-choice-title">{t('records.enabled')}</span>
+          <span className="vdg-choice-hint">{t('records.enabledHint')}</span>
+        </span>
+      </label>
+    </Section>
+  )
+}
+
 function AskSection({ t, value, disabled, save }: { t: Translate; value: GuardSettings; disabled: boolean; save: Save }) {
   const [text, setText] = useState(String(value.askTimeout))
   useEffect(() => { setText(String(value.askTimeout)) }, [value.askTimeout])
@@ -305,6 +381,7 @@ function TrySection({ t }: { t: Translate }) {
 export function SettingsPage({ services, t }: { services: Services; t: Translate }) {
   const settings = useSettings(services.form, t)
   const live = useWatch(services.panel)
+  const [view, setView] = useState<'settings' | 'records'>('settings')
   const active = live != null && (live.signIn !== null || running(live.job))
   usePolling(services.panel, active ? 1000 : undefined)
   const value = settings.value
@@ -315,6 +392,7 @@ export function SettingsPage({ services, t }: { services: Services; t: Translate
     return <div className="vdg vdg-page"><div className="vdg-alert warn">{t('unavailable')}</div></div>
   }
   const { disabled, save, saveAsync } = settings
+  if (view === 'records') return <RecordsPage t={t} recording={value.recordDecisions} onBack={() => { setView('settings') }} />
   const refresh = (): void => {
     services.panel.refresh()
     services.cloudModels.refresh()
@@ -383,7 +461,9 @@ export function SettingsPage({ services, t }: { services: Services; t: Translate
       <OptionsSection t={t} value={value} disabled={disabled} save={save} />
       <ReviewSection services={services} t={t} value={value} disabled={disabled} save={save} />
       {value.review === 'off' ? null : <RulesSection t={t} value={value} disabled={disabled} saveAsync={saveAsync} />}
+      {value.review === 'off' ? null : <PromptsSection t={t} value={value} disabled={disabled} saveAsync={saveAsync} />}
       <AskSection t={t} value={value} disabled={disabled} save={save} />
+      <RecordsSection t={t} value={value} disabled={disabled} save={save} onOpen={() => { setView('records') }} />
       <TrySection t={t} />
     </div>
   )

@@ -15,8 +15,8 @@ import { RUN_CODE_NAME, type PreToolDecision, type ToolExecution } from '@deepse
 import type {} from '@deepseek-ai/dsh-user-approval'
 import type {} from '@deepseek-ai/dsh-working-directory'
 import {
-  DecisionEngine, DecisionHome, DOWNLOAD_SOURCES, PACK_IDS,
-  type DecisionOptions, type DownloadSource, type EngineSettings, type PackId,
+  DecisionEngine, DecisionHome, DOWNLOAD_SOURCES, PACK_IDS, POLICY_VERSION, renderCall,
+  type DecisionOptions, type DownloadSource, type EngineSettings, type JudgeCall, type PackId,
 } from '@openvulcan/vulcan-decision'
 
 import { translateCall } from './calls.js'
@@ -24,10 +24,13 @@ import { decide, stageOf, wantsReview, type FirstStage, type Outcome, type Secon
 import { IntentStore, intentTool } from './intent.js'
 import { reviewCall } from './review.js'
 import { deviceInfo, DshCredentialStore, handle, Panel, ROUTE_PREFIX, ROUTES } from './panel.js'
-import { installUnattended } from './unattended.js'
+import { RecordStore, type NewRecord, type RecordJudge, type RecordOutcome, type RecordReview } from './records.js'
+import { installSessionState, MAX_PROMPT_CHARS } from './session-state.js'
 import { VERSION } from './version.js'
 
-export { PROJECTION_KEY, UNATTENDED_COMMAND, UNATTENDED_RECORD, type GuardSessionView } from './unattended.js'
+export {
+  PROJECTION_KEY, REVIEW_PROMPT_COMMAND, REVIEW_PROMPT_RECORD, UNATTENDED_COMMAND, UNATTENDED_RECORD, type GuardSessionView,
+} from './session-state.js'
 
 export const name = 'vulcan-decision-guard'
 export const inject = ['llm', 'permissionPresets', 'sessionProjections', 'sessions', 'tools', 'workingDirectory']
@@ -80,6 +83,12 @@ export interface Config {
   denyRules: Volatile<string>
   forbidRules: Volatile<string>
   llmOverridesBlock: Volatile<boolean>
+  /** System default additional review prompt while the user is present; a session may replace it. */
+  reviewPrompt: Volatile<string>
+  /** Deny policy offered when a session turns unattended mode on; the session keeps what the user confirmed. */
+  unattendedPolicy: Volatile<string>
+  /** Whether calls are kept in the local decision log. */
+  recordDecisions: Volatile<boolean>
   /** Seconds an approval prompt waits before the call is refused; 0 waits for the user. */
   askTimeout: Volatile<number>
   crossProjectWrites: Volatile<DecisionOptions['cross_project_writes']>
@@ -139,6 +148,16 @@ export const Config = Schema.object({
     .default(false)
     .description('Whether calls the decision model blocks also go to the LLM review, which may then allow them.')
     .volatile(),
+  reviewPrompt: Schema.string().role('textarea').max(MAX_PROMPT_CHARS).default('')
+    .description('Default additional guidance the LLM review follows while the user is present; a session may replace it.')
+    .volatile(),
+  unattendedPolicy: Schema.string().role('textarea').max(MAX_PROMPT_CHARS).default('')
+    .description('Deny policy offered when a session turns unattended mode on: what must never run while the user is away.')
+    .volatile(),
+  recordDecisions: Schema.boolean()
+    .default(false)
+    .description('Keep a local decision log with the original call arguments, in the plugin data directory.')
+    .volatile(),
   askTimeout: Schema.natural().max(MAX_ASK_TIMEOUT)
     .default(0)
     .description('Seconds an approval prompt waits before the call is refused; 0 waits for the user.')
@@ -187,10 +206,21 @@ export interface PromptPayload {
   readonly timeoutMs?: number
 }
 
-/** A call the gate finished with, and the purpose the agent stated for it. */
+/** A judged call: what the gate decided, the purpose the agent stated, and how to log its ending. */
 interface Gated {
   readonly outcome: Outcome
   readonly intent: string | undefined
+  /**
+   * Keep the call in the decision log, when the log is turned on. Runs and refusals the gate
+   * settled log their own ending; `ending` is how a question to the user ended.
+   */
+  readonly log: (ending?: RecordOutcome) => void
+}
+
+/** A decision dsh acts on, and how the call ended for the decision log; no ending is logged on cancellation. */
+interface Settled {
+  readonly decision: PreToolDecision
+  readonly ending?: RecordOutcome
 }
 
 /** Install the Vulcan Decision gate and, in `auto-preset` mode, the Auto preset. */
@@ -213,7 +243,19 @@ export function apply(ctx: Context, config: Config): void {
   let releasing = false
   let ownsAuto = false
 
-  const markedUnattended = installUnattended(ctx)
+  const sessionState = installSessionState(ctx)
+  const records = new RecordStore(engine.home)
+
+  /** Append one finished call off the gate's path; a failure is only logged. */
+  const keep = (record: NewRecord): void => {
+    setImmediate(() => {
+      try {
+        records.append(record)
+      } catch (error) {
+        ctx.logger.warn(`cannot keep a decision record: ${messageOf(error)}`)
+      }
+    })
+  }
 
   const governs = (exec: ToolExecution): boolean => {
     const agent = exec.agent
@@ -226,7 +268,7 @@ export function apply(ctx: Context, config: Config): void {
 
   /** Nobody can be asked: the session is marked unattended, or its approval policy never asks. */
   const unattended = (agent: Agent): boolean => {
-    if (markedUnattended(agent.session)) return true
+    if (sessionState(agent.session).unattended) return true
     const approval = ctx.get('approval')
     return approval !== undefined && (approval.overrideOf(agent.session) ?? approval.config.policy ?? 'ask') === 'never'
   }
@@ -250,7 +292,18 @@ export function apply(ctx: Context, config: Config): void {
     }
   }
 
-  const panel = new Panel(engine, { engine: engineSettings, downloadSource: () => config.downloadSource.get() })
+  const panel = new Panel(engine, { engine: engineSettings, downloadSource: () => config.downloadSource.get() }, records)
+
+  /**
+   * The user's own text the review reads: the session's review prompt, else the system default,
+   * while attended; the deny policy the session confirmed while unattended. A session that never
+   * asks because of its approval policy, not the unattended switch, reads the default deny policy.
+   */
+  const reviewText = (agent: Agent, attended: boolean): string => {
+    const state = sessionState(agent.session)
+    if (attended) return state.reviewPrompt ?? config.reviewPrompt.get()
+    return state.unattended ? state.denyPolicy : config.unattendedPolicy.get()
+  }
 
   /**
    * The interface language the user chose in dsh's settings, or undefined when it follows the
@@ -279,6 +332,7 @@ export function apply(ctx: Context, config: Config): void {
   const gate = async (exec: ToolExecution, signal: AbortSignal): Promise<Gated | 'run' | 'cancel'> => {
     // `governs` established that the call has an agent.
     const agent = exec.agent!
+    const judgedAtMs = Date.now()
     const project = await ctx.workingDirectory.ensure(agent, signal).catch(() => undefined)
     const translation = translateCall(exec.name, exec.arguments, project)
     if (translation.kind === 'allow') return 'run'
@@ -287,26 +341,42 @@ export function apply(ctx: Context, config: Config): void {
 
     const settings = engineSettings()
     const decisionOptions = settings.options
-    const first: FirstStage = await abortable(engine.judge({
-      ...project === undefined ? {} : { project },
-      tool: translation.tool,
-      arguments: translation.arguments,
-    }, settings), signal).then(
+    const call = { ...project === undefined ? {} : { project }, tool: translation.tool, arguments: translation.arguments }
+    const judgeStarted = performance.now()
+    const first: FirstStage = await abortable(engine.judge(call, settings), signal).then(
       verdict => ({ kind: 'verdict', verdict }),
       (error: unknown) => ({ kind: 'error', message: messageOf(error) }),
     )
     if (signal.aborted) return 'cancel'
-    const stage = stageOf(first)
-    if (stage === undefined) return 'run'
-
+    const judgeMs = performance.now() - judgeStarted
     const situation: Situation = {
       attended: !unattended(agent),
       llm: config.review.get() !== 'off',
       llmOverridesBlock: config.llmOverridesBlock.get(),
     }
+    let review: RecordReview | undefined
+    // The record is built only when the log is on, since it renders the call again.
+    const log = (ending: RecordOutcome): void => {
+      if (!config.recordDecisions.get()) return
+      keep({
+        judgedAtMs,
+        sessionId: agent.session.id,
+        ...project === undefined ? {} : { workspaceRoot: project },
+        toolName: exec.name,
+        arguments: JSON.stringify(exec.arguments) ?? 'null',
+        attended: situation.attended,
+        judge: judgeOf(first, judgeMs, settings, call),
+        ...review === undefined ? {} : { review },
+        outcome: ending,
+      })
+    }
+
+    const stage = stageOf(first)
+    if (stage === undefined) return { outcome: { kind: 'run' }, intent, log: () => { log('judge_allowed') } }
     let second: SecondStage = { kind: 'skipped' }
     if (wantsReview(stage, situation)) {
       const route = reviewRoute(agent)
+      const reviewStarted = performance.now()
       second = typeof route === 'string'
         ? { kind: 'error', message: route }
         : await reviewCall(llm, {
@@ -317,6 +387,7 @@ export function apply(ctx: Context, config: Config): void {
           project,
           options: decisionOptions,
           rules: { allow: config.allowRules.get(), deny: config.denyRules.get(), forbid: config.forbidRules.get() },
+          prompt: reviewText(agent, situation.attended),
           stage,
           tool: exec.name,
           arguments: exec.arguments,
@@ -324,8 +395,23 @@ export function apply(ctx: Context, config: Config): void {
           history: agent.session.deriveMessages(),
         }, signal)
       if (signal.aborted) return 'cancel'
+      review = reviewOf(second, performance.now() - reviewStarted)
     }
-    return { outcome: decide(exec.name, first, second, situation), intent }
+    const outcome = decide(exec.name, first, second, situation)
+    // A run or a refusal was settled here; only a question's ending is known later.
+    const settled: RecordOutcome | undefined = outcome.kind === 'run'
+      ? 'review_allowed'
+      : outcome.kind === 'deny'
+        ? second.kind === 'forbid' || second.kind === 'deny' || second.kind === 'review' ? 'review_denied' : 'unattended_denied'
+        : undefined
+    return {
+      outcome,
+      intent,
+      log: (ending) => {
+        const kept = settled ?? ending
+        if (kept !== undefined) log(kept)
+      },
+    }
   }
 
   /** Ask the user through dsh's approval service, refusing the call when the countdown runs out. */
@@ -334,10 +420,10 @@ export function apply(ctx: Context, config: Config): void {
     ask: Extract<Outcome, { kind: 'ask' }>,
     intent: string | undefined,
     signal: AbortSignal,
-  ): Promise<PreToolDecision> => {
+  ): Promise<Settled> => {
     const approval = ctx.get('approval')
     if (approval === undefined) {
-      return denied(`${ask.reason}. No approval channel is available, so the call was not executed.`)
+      return { decision: denied(`${ask.reason}. No approval channel is available, so the call was not executed.`), ending: 'not_asked' }
     }
     const seconds = config.askTimeout.get()
     const countdown = seconds > 0 ? AbortSignal.timeout(seconds * 1000) : undefined
@@ -359,20 +445,20 @@ export function apply(ctx: Context, config: Config): void {
         signal: countdown === undefined ? signal : AbortSignal.any([signal, countdown]),
       })
     } catch (error) {
-      return denied(`${ask.reason}. The user could not be asked (${messageOf(error)}), so the call was not executed.`)
+      return { decision: denied(`${ask.reason}. The user could not be asked (${messageOf(error)}), so the call was not executed.`), ending: 'not_asked' }
     }
-    if (signal.aborted) return { kind: 'cancel' }
+    if (signal.aborted) return { decision: { kind: 'cancel' } }
     switch (result) {
       case 'allowed-once':
-        return { kind: 'allow' }
+        return { decision: { kind: 'allow' }, ending: 'user_allowed' }
       case 'rejected':
-        return denied(`The user rejected tool "${exec.name}". The call was not executed.`)
+        return { decision: denied(`The user rejected tool "${exec.name}". The call was not executed.`), ending: 'user_denied' }
       case 'cancelled':
         return countdown?.aborted === true
-          ? denied(`${ask.reason}. Nobody answered the approval prompt within ${seconds} seconds, so the call was not executed.`)
-          : denied(`${ask.reason}. The approval prompt was withdrawn, so the call was not executed.`)
+          ? { decision: denied(`${ask.reason}. Nobody answered the approval prompt within ${seconds} seconds, so the call was not executed.`), ending: 'approval_expired' }
+          : { decision: denied(`${ask.reason}. The approval prompt was withdrawn, so the call was not executed.`), ending: 'not_asked' }
       case 'unavailable':
-        return denied(`${ask.reason}. No approval channel answered, so the call was not executed.`)
+        return { decision: denied(`${ask.reason}. No approval channel answered, so the call was not executed.`), ending: 'not_asked' }
     }
   }
 
@@ -479,17 +565,24 @@ export function apply(ctx: Context, config: Config): void {
       const gated = await gate(exec, signal)
       if (gated === 'cancel') return { kind: 'cancel' }
       if (gated === 'run') return next()
-      const { outcome, intent } = gated
+      const { outcome, intent, log } = gated
       switch (outcome.kind) {
         case 'run':
+          log()
           return next()
         case 'deny':
+          log()
           return denied(outcome.reason)
         case 'ask': {
           // A later listener's denial, cancellation or own question takes precedence over asking.
           const downstream = await next()
-          if (downstream.kind !== 'allow') return downstream
-          return await askUser(exec, outcome, intent, signal)
+          if (downstream.kind !== 'allow') {
+            if (downstream.kind === 'deny') log('host_denied')
+            return downstream
+          }
+          const settled = await askUser(exec, outcome, intent, signal)
+          if (settled.ending !== undefined) log(settled.ending)
+          return settled.decision
         }
       }
     }, { prepend: true })
@@ -549,6 +642,52 @@ function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
     signal.addEventListener('abort', abort, { once: true })
     promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort))
   })
+}
+
+/** The decision model's part of a record; the trace is kept whenever the call renders. */
+function judgeOf(first: FirstStage, elapsedMs: number, settings: EngineSettings, call: JudgeCall): RecordJudge {
+  let rendered: string | undefined
+  try {
+    rendered = renderCall(call)
+  } catch {
+    rendered = undefined
+  }
+  const verdict = first.kind === 'verdict' ? first.verdict : undefined
+  const model = verdict?.model ?? (settings.backend === 'cloud' ? settings.cloudModel : settings.local?.model ?? '')
+  return {
+    ...verdict === undefined ? { error: first.kind === 'error' ? first.message : '' } : { label: verdict.decision },
+    ...verdict?.reason_code === undefined ? {} : { reasonCode: verdict.reason_code },
+    elapsedMs: Math.round(elapsedMs),
+    ...rendered === undefined
+      ? {}
+      : {
+        trace: {
+          backend: settings.backend,
+          model,
+          ...verdict === undefined ? {} : { via: verdict.via },
+          policyVersion: POLICY_VERSION,
+          settings: settings.options,
+          rendered,
+          ...verdict?.logits === undefined ? {} : { logits: verdict.logits },
+          ...verdict?.input_tokens === undefined ? {} : { inputTokens: verdict.input_tokens },
+        },
+      },
+  }
+}
+
+/** The review LLM's part of a record. */
+function reviewOf(second: SecondStage, elapsedMs: number): RecordReview | undefined {
+  const elapsed = Math.round(elapsedMs)
+  switch (second.kind) {
+    case 'skipped':
+      return undefined
+    case 'error':
+      return { error: second.message, elapsedMs: elapsed }
+    case 'allow':
+      return { verdict: 'allow', elapsedMs: elapsed }
+    default:
+      return { verdict: second.kind, ...second.reason === undefined ? {} : { reason: second.reason }, elapsedMs: elapsed }
+  }
 }
 
 function denied(reason: string): PreToolDecision {

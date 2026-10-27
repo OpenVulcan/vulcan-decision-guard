@@ -9,6 +9,7 @@ import { DecisionEngine, DecisionHome, DEFAULT_OPTIONS, type EngineSettings } fr
 
 import { startMockOpenVulcan } from '../../vulcan-decision/lib/cloud/mock-openvulcan.test.helper.js'
 import { CREDENTIAL_KEY, DshCredentialStore, handle, Panel, ROUTES, type CredentialRecords } from './panel.js'
+import { RecordStore } from './records.js'
 
 /** dsh's credential service, reduced to one in-memory record per key. */
 class Records implements CredentialRecords {
@@ -38,7 +39,8 @@ const engine = new DecisionEngine({
 })
 // An empty model uses the first one OpenVulcan lists, as a fresh install does.
 const settings: EngineSettings = { backend: 'cloud', cloudModel: '', options: DEFAULT_OPTIONS }
-const panel = new Panel(engine, { engine: () => settings, downloadSource: () => 'official' })
+const log = new RecordStore(engine.home)
+const panel = new Panel(engine, { engine: () => settings, downloadSource: () => 'official' }, log)
 
 async function route(method: 'GET' | 'POST', name: string, query = '', body?: unknown): Promise<{ status: number; answer: { ok: boolean; value?: unknown; error?: { code: string } } }> {
   const entry = ROUTES.find(([m, n]) => m === method && n === name)
@@ -100,4 +102,22 @@ test('signing out revokes the device and deletes the record', async () => {
   assert.equal(status, 401)
   assert.equal(answer.error?.code, 'not_signed_in')
   assert.deepEqual((await route('GET', 'cloud/endpoints')).answer.value, { mode: 'auto', endpoints: [] })
+})
+
+test('decision log routes page, mark, export and clear, and reject unknown records and filters', async () => {
+  const kept = log.append({
+    judgedAtMs: Date.now(), sessionId: 's1', toolName: 'bash', arguments: '{"command":"ls"}', attended: true,
+    judge: { label: 'review', elapsedMs: 1, trace: { backend: 'cloud', model: 'm', policyVersion: 'v', settings: DEFAULT_OPTIONS, rendered: 'Tool: bash' } },
+    outcome: 'user_allowed',
+  })
+  const page = await route('GET', 'records', '?label=review&limit=10')
+  assert.equal((page.answer.value as { records: unknown[] }).records.length, 1)
+  assert.equal((await route('GET', 'records', '?label=maybe')).status, 400)
+  assert.equal((await route('GET', 'records', '?before=nope')).status, 400)
+  assert.equal((await route('POST', 'records/mark', '', { id: kept.id, correction: 'maybe' })).status, 400)
+  assert.equal((await route('POST', 'records/mark', '', { id: 'nope', correction: 'allow' })).status, 400)
+  assert.equal((await route('POST', 'records/mark', '', { id: kept.id, correction: 'allow' })).status, 200)
+  assert.equal(((await route('POST', 'records/export')).answer.value as { count: number }).count, 1)
+  await route('POST', 'records/clear')
+  assert.equal(((await route('GET', 'records')).answer.value as { total: number }).total, 0)
 })

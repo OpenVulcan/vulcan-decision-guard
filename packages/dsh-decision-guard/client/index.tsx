@@ -2,8 +2,8 @@
  * Browser half of the dsh plugin:
  *
  * - Settings › Auto approval: the whole configuration, in VulcanCode's look (`settings.tsx`).
- * - The composer pill left of the model selector, with a card for the settings changed most
- *   often and the session's unattended switch (`quick.tsx`).
+ * - The composer pill left of the model selector, with a card for the category grants, the
+ *   session's review prompt and unattended mode, and the settings changed most often (`quick.tsx`).
  * - The approval card that takes over the composer while one of this plugin's prompts waits.
  * - On the Plugins page: a pointer to the settings, and the Auto review conflict notice. dsh's own
  *   Auto review and Vulcan Decision both review every tool call before it runs and only one of
@@ -27,8 +27,9 @@ export const inject = [
   'slots', 'locale', 'sessions', 'remote', 'remote.pluginManager', 'remote.permissionPresets', 'remote.session', 'configForms',
 ]
 
-/** Mirrors `UNATTENDED_COMMAND` in `src/unattended.ts`. */
+/** Mirror `UNATTENDED_COMMAND` and `REVIEW_PROMPT_COMMAND` in `src/session-state.ts`. */
 const UNATTENDED_COMMAND = 'vulcan-unattended'
+const REVIEW_PROMPT_COMMAND = 'vulcan-review-prompt'
 
 /** Install the settings section, the composer pill, the approval card and the Plugins page notices. */
 export function apply(ctx: ClientContext): void {
@@ -122,15 +123,20 @@ export function apply(ctx: ClientContext): void {
     id: 'vulcan-decision-guard-quick',
     order: 10,
     locale: NAMESPACE,
-    inject: (sessionId: string): QuickInjected => ({
-      services,
-      toggleUnattended: async (unattended) => {
+    inject: (sessionId: string): QuickInjected => {
+      // The commands keep newlines after their first word, so a multi-line prompt arrives whole.
+      const run = async (command: string, input: string): Promise<void> => {
         const session = ctx.sessions.binding(sessionId)?.session
         if (session === undefined) throw new Error('this session is not materialized yet')
-        const result = await session.command(`/${UNATTENDED_COMMAND} ${unattended ? 'on' : 'off'}`)
+        const result = await session.command(`/${command} ${input}`)
         if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
-        if (!result.value.matched) throw new Error(`the Host offers no /${UNATTENDED_COMMAND} command`)
-      },
-    }),
+        if (!result.value.matched) throw new Error(`the Host offers no /${command} command`)
+      }
+      return {
+        services,
+        setUnattended: policy => run(UNATTENDED_COMMAND, policy === null ? 'off' : `on ${policy}`.trimEnd()),
+        setReviewPrompt: prompt => run(REVIEW_PROMPT_COMMAND, prompt === null ? 'default' : `set ${prompt}`.trimEnd()),
+      }
+    },
   }, QuickSetting))
 }

@@ -38,6 +38,7 @@ const REQUEST: ReviewRequest = {
   project: '/work/demo',
   options: { cross_project_writes: 'allow', database_reset: 'confirm', project_reset: 'confirm' },
   rules: { allow: 'Reading logs is fine.', deny: '', forbid: 'Never touch the billing database.' },
+  prompt: 'Ask me before any network call.',
   stage: 'review',
   tool: 'bash',
   arguments: { command: 'psql -c "DROP DATABASE orders"' },
@@ -57,6 +58,17 @@ test('the review input carries rules, instructions, calls and intent, not tool o
   assert.match(input, /"tool": "bash"/)
   assert.doesNotMatch(input, /tool output must not appear/)
   assert.match(input, /DROP DATABASE orders/)
+})
+
+test('the user\'s own text goes in as the review prompt while attended and as the deny policy while unattended', () => {
+  const attended = reviewInput(REQUEST)
+  assert.match(attended, /USER_REVIEW_PROMPT[^\n]*\n\n"Ask me before any network call\."/)
+  assert.doesNotMatch(attended, /UNATTENDED_DENY_POLICY/)
+  const unattended = reviewInput({ ...REQUEST, attended: false, prompt: 'Never push.' })
+  assert.match(unattended, /UNATTENDED_DENY_POLICY[^\n]*\n\n"Never push\."/)
+  assert.doesNotMatch(unattended, /USER_REVIEW_PROMPT/)
+  assert.match(reviewPolicy(true, undefined), /USER_REVIEW_PROMPT/)
+  assert.match(reviewPolicy(false, undefined), /UNATTENDED_DENY_POLICY/)
 })
 
 function llmAnswering(chunks: StreamChunk[], seen?: GenerateOptions[]) {

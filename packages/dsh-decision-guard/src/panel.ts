@@ -1,6 +1,6 @@
 /**
- * The Host side of the settings panel: the OpenVulcan account, cloud endpoints, runtime packs and
- * local models, served as exact `/api/vulcan-decision/*` routes inside dsh's authenticated
+ * The Host side of the settings panel: the OpenVulcan account, cloud endpoints, runtime packs,
+ * local models and the decision log, served as exact `/api/vulcan-decision/*` routes inside dsh's authenticated
  * connection. Only owner peers reach these routes.
  *
  * Data lives where dsh keeps its own: the OpenVulcan credential in dsh's credential store, packs
@@ -11,12 +11,14 @@ import os from 'node:os'
 
 import { credentialKey, type CredentialRecord } from '@deepseek-ai/dsh-credentials'
 import {
-  DecisionEngine, DecisionError, DOWNLOAD_SOURCES, MODEL_CATALOG, MODEL_FAMILIES, MODEL_SOURCES, PACK_IDS, PLANNED_PACKS,
+  DECISIONS, DecisionEngine, DecisionError, DOWNLOAD_SOURCES, MODEL_CATALOG, MODEL_FAMILIES, MODEL_SOURCES, PACK_IDS, PLANNED_PACKS,
   detectHardware, gpuGeneration, installModelFromDirectory, installPack, installedPack, isPackId, isSite, listModels, parseCredential,
   readLock, recommend, removeModel, removePack, downloadModel,
-  type Credential, type CredentialStore, type DecisionHome, type DownloadSource, type EngineSettings, type ModelFamily, type ModelSource,
+  type Credential, type CredentialStore, type Decision, type DecisionHome, type DownloadSource, type EngineSettings, type ModelFamily, type ModelSource,
   type EndpointSnapshot, type PendingSignIn, type TestInput, type TestResult, type Verdict,
 } from '@openvulcan/vulcan-decision'
+
+import { PAGE_LIMIT_MAX, type DecisionRecord, type RecordExport, type RecordPage, type RecordStore } from './records.js'
 
 /** Prefix of every panel route, below dsh's `/api`. Also restated in `client/index.tsx`. */
 export const ROUTE_PREFIX = '/api/vulcan-decision/'
@@ -82,7 +84,7 @@ export class Panel {
   private job: Job | undefined
   private jobAbort: AbortController | undefined
 
-  constructor(readonly engine: DecisionEngine, private readonly settings: PanelSettings) {}
+  constructor(readonly engine: DecisionEngine, private readonly settings: PanelSettings, private readonly records: RecordStore) {}
 
   get home(): DecisionHome {
     return this.engine.home
@@ -263,6 +265,43 @@ export class Panel {
     return await this.engine.judge({ tool, arguments: args as Record<string, unknown> }, this.settings.engine())
   }
 
+  /** One page of the decision log, newest first. */
+  recordPage(url: URL): RecordPage {
+    const param = (name: string) => {
+      const value = url.searchParams.get(name)
+      return value === null || value === '' ? undefined : value
+    }
+    const limit = Number(param('limit') ?? PAGE_LIMIT_MAX)
+    if (!Number.isFinite(limit)) throw new DecisionError('invalid_request', 'limit must be a number')
+    const label = param('label')
+    const workspace = param('workspace')
+    const before = param('before')
+    return logged(() => this.records.page({
+      limit,
+      ...label === undefined ? {} : { label },
+      ...workspace === undefined ? {} : { workspace },
+      ...before === undefined ? {} : { before },
+      markedOnly: param('marked') === '1',
+    }))
+  }
+
+  /** Mark the label a record should have had, or clear the mark with null. */
+  markRecord(id: unknown, correction: unknown): DecisionRecord {
+    if (typeof id !== 'string' || id === '') throw new DecisionError('invalid_request', 'id is required')
+    if (correction !== null && !(DECISIONS as readonly unknown[]).includes(correction)) {
+      throw new DecisionError('invalid_request', `correction must be null or one of ${DECISIONS.join(', ')}`)
+    }
+    return logged(() => this.records.mark(id, correction as Decision | null))
+  }
+
+  exportRecords(): RecordExport {
+    return logged(() => this.records.export())
+  }
+
+  clearRecords(): void {
+    this.records.clear()
+  }
+
   close(): void {
     this.cancelSignIn()
     this.cancelJob()
@@ -338,6 +377,13 @@ export const ROUTES: readonly (readonly ['GET' | 'POST', string, Handler])[] = [
     const body = await bodyOf(request)
     return await panel.test(body['tool'], body['args'])
   }],
+  ['GET', 'records', async (panel, _request, url) => panel.recordPage(url)],
+  ['POST', 'records/mark', async (panel, request) => {
+    const body = await bodyOf(request)
+    return panel.markRecord(body['id'], body['correction'])
+  }],
+  ['POST', 'records/export', async panel => panel.exportRecords()],
+  ['POST', 'records/clear', async panel => panel.clearRecords()],
 ]
 
 /** Answer one panel request; failures carry their code, never a stack. */
@@ -356,6 +402,16 @@ async function bodyOf(request: Request): Promise<Record<string, unknown>> {
   const value: unknown = await request.json().catch(() => undefined)
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new DecisionError('invalid_request', 'the body must be a JSON object')
   return value as Record<string, unknown>
+}
+
+/** A decision log call; a record or filter the log does not know is the caller's mistake. */
+function logged<T>(work: () => T): T {
+  try {
+    return work()
+  } catch (error) {
+    if (error instanceof RangeError) throw new DecisionError('invalid_request', error.message)
+    throw error
+  }
 }
 
 function messageOf(error: unknown): string {

@@ -233,7 +233,8 @@ Arguments: <实际参数的紧凑 JSON，键保持原顺序>
   有人值守与无人值守分为两套：有人值守可答 allow / review / deny / forbid，无人值守只可答 allow / deny 并
   被告知不存在人工复核。理由按界面语言书写（读取 dsh `locale` 设置的 `preference`；未设置时界面跟随浏览器，
   Host 端无从得知，改用用户指令的语言）。输入分为 ENVIRONMENT（项目与授权选项）、USER_RULES（用户的
-  三组规则，优先级 forbid > deny > allow）、USER_INSTRUCTIONS（最近 6 条用户与代理指令，每条最多
+  三组规则，优先级 forbid > deny > allow）、有人值守时的 USER_REVIEW_PROMPT（附加复核提示词）或无人值守时的
+  UNATTENDED_DENY_POLICY（拒绝策略）、USER_INSTRUCTIONS（最近 6 条用户与代理指令，每条最多
   4000 字符）、RECENT_TOOL_CALLS（最近 12 次工具调用，参数最多 1500 字符）、AGENT_INTENT（代理经意图工具
   给出的说明，只是声明而非授权）与 PENDING_CALL（判定阶段、工具与参数）。输出必须是当前模式的封闭 JSON
   形状，理由最多保留 300 字符。
@@ -244,29 +245,48 @@ Arguments: <实际参数的紧凑 JSON，键保持原顺序>
   默认焦点、倒计时）；浏览器端以优先级 0 注册 `conversation.composer`，遇到带该键的审批时显示本插件的
   卡片（标签、命令预览、LLM 理由、意图、倒计时，Esc 拒绝）。拒绝时附带
   `info {name: 'VulcanDecisionDeniedError', code: 'VULCAN_DECISION_DENIED'}`。
-- **无人值守**（`src/unattended.ts`）：按会话保存为插件记录 `plugin:vulcan-decision-guard/unattended`，
-  投影为会话状态 `vulcanDecision`，由命令 `/vulcan-unattended on|off` 写入（状态未变时不写）。浏览器端在
-  输入框快捷卡中显示该开关（独立开关模式，或当前预设为 `auto` 时）。审批策略为 `never` 的会话
-  同样按无人值守处理。
+- **会话状态**（`src/session-state.ts`）：两条插件记录投影为会话状态 `vulcanDecision`
+  `{unattended, denyPolicy, reviewPrompt}`（状态未变时不写记录）：
+  - 无人值守：`plugin:vulcan-decision-guard/unattended` `{enabled, denyPolicy?}`，由命令
+    `/vulcan-unattended on [拒绝策略] | off` 写入。开启时确认的拒绝策略作为 UNATTENDED_DENY_POLICY 送给复核；
+    审批策略为 `never` 的会话同样按无人值守处理，使用设置中的系统默认拒绝策略 `unattendedPolicy`。
+  - 附加复核提示词：`plugin:vulcan-decision-guard/review-prompt` `{prompt: string | null}`，由命令
+    `/vulcan-review-prompt set <提示词> | default` 写入；`null` 表示跟随系统默认值 `reviewPrompt`。有人值守时
+    作为 USER_REVIEW_PROMPT 送给复核，不能放宽规则或授权选项。
+  - 两段文本最多 4000 个 UTF-16 码元（`MAX_PROMPT_CHARS`），与配置 Schema 的 `max` 计数一致；命令保留
+    首词之后的换行。
+- **判定记录**（`src/records.ts`）：设置 `recordDecisions` 打开时（默认关闭），判定模型或复核参与的每次决定
+  在结束后写入 `$DSH_HOME/vulcan-decision/records.v1.jsonl`（写入放在 `setImmediate` 中，失败只记日志，
+  不影响判定）。一条记录含时间、会话、工作区、工具、原始参数（JSON 文本）、是否有人值守、判定模型部分
+  （结论或错误、规则代码、耗时，以及可渲染时的输入：后端、模型、节点、策略版本、授权选项、渲染文本、
+  分数）、复核部分（结论、理由或错误、耗时）、结局（`judge_allowed` / `review_allowed` / `review_denied` /
+  `unattended_denied` / `user_allowed` / `user_denied` / `approval_expired` / `not_asked` / `host_denied`）与用户
+  标记的应有结论。保留最近 5000 条、最长 30 天，超出 500 条后整体重写；文件出现无法解析的行时，所有读写
+  都报错，直到用户清除。导出只包含带模型输入的已标记记录，每行为
+  `{id, policy_version, settings, rendered, label, metadata}` 训练样本，与 Vulcan Code 的导出形状相同。
 - **配置**（`Config`，全部 `.volatile()`，每次操作开始时读取，保存后无需重启；存入 profile 的
   `cordis.patch.yml`）：`mode`（接入方式）、`backend`（`cloud` / `local`，默认 `cloud`）、`cloudModel`（默认空，即服务列出的第一个）、
   `cloudEndpoint`（锁定的节点，空为自动）、`localPack` 与 `localModel`（本机后端使用的运行包与模型）、
   `downloadSource`（`official` / `cn`）、`review`（`session` / `custom` / `off`，默认 `session`）、`reviewProvider` 与
   `reviewModel`、`allowRules` / `denyRules` / `forbidRules`（自然语言，默认空）、`llmOverridesBlock`（默认
   `false`）、`askTimeout`（秒，0 表示一直等待，最大 3600）、`crossProjectWrites`（默认 `allow`）、
-  `databaseReset` 与 `projectReset`（默认 `confirm`）。
+  `databaseReset` 与 `projectReset`（默认 `confirm`）、`reviewPrompt` 与 `unattendedPolicy`（系统默认的附加
+  复核提示词与拒绝策略，默认空，最多 4000 字符）、`recordDecisions`（默认 `false`）。
 - **面板接口**（`src/panel.ts`）：插件经 `connection.fetch.register` 在 dsh 自己的 HTTP 服务上注册
   `/api/vulcan-decision/*`，浏览器端以相对路径调用，沿用 dsh 的访问令牌，不另开端口。GET：`state`、
   `cloud/models`、`cloud/endpoints`（已保存或默认模型的节点表，过期时在后台重测）；POST：`signin?site`、
   `signin/cancel`、`signout`、`cloud/probe`、`cloud/check-lock {model?, endpoint}`、`cloud/test {endpoint, input}`、
   `packs/install?pack&source`、
   `packs/remove?pack`、`models/download?family&source`、`models/install-dir {dir}`、`models/remove?id`、`job/cancel`、
-  `test {tool, args}`。应答为 `{ok, value}` 或 `{ok:false, error:{code, message}}`（400 `invalid_request`、
+  `test {tool, args}`；判定记录：GET `records?label&workspace&marked=1&before&limit`（最新在前，`before` 为上一页最后
+  一条的 id，每页最多 200 条），POST `records/mark {id, correction}`（`correction` 为 allow / review / block 或
+  `null`）、`records/export`、`records/clear`。应答为 `{ok, value}` 或 `{ok:false, error:{code, message}}`（400 `invalid_request`、
   401 `not_signed_in`、429 `rate_limited`，其余 500）。同一时间只运行一个后台任务（安装运行包或模型），
   阶段为 download / unpack / install / probe / verify / done / failed / cancelled，可取消。`state` 不含任何令牌。
 - **设置位置**：dsh 的「设置」对话框中新增“自动审批”一节（`settings.section`，id `vulcan-auto-approval`，
   排在 Agent 预设之后），经 `settings.configure({ auto: false })` 关闭 dsh 自动生成的表单，经
-  `configForms.get('vulcan-decision-guard')` 读写；每个控件改动即保存，只有三组规则用“保存规则”按钮一起保存。
+  `configForms.get('vulcan-decision-guard')` 读写；每个控件改动即保存，只有三组规则与两段附加提示词用保存按钮
+  一起保存。
   插件页（`plugins.bundle.config`）不再放配置，只有一句说明与“打开自动审批设置”按钮（经 `sidebar.settings`
   的 store 调用 `openSection`）。界面沿用 VulcanCode 的样式（直角、细线、带编号的分节与橙色角标、浅色标签），
   样式表限定在 `.vdg` 下，深色跟随 `body[data-ds-dark-theme]`。
@@ -275,10 +295,19 @@ Arguments: <实际参数的紧凑 JSON，键保持原顺序>
   （`cloud/endpoints` 每 2 秒刷新；端点、地区、网络、计算、合计、状态、请求测试七列，使用中 / 已锁定标签；
   “立即重新测试”；“自动（延迟最低）/ 始终使用 X”，锁定前经 `cloud/check-lock` 确认）与请求测试对话框；本机时为
   硬件与建议、运行包表、本机模型、本机判定使用的运行包与模型；随后为授权选项、复核 LLM（含指定模型与允许
-  LLM 推翻拦截）、复核规则、询问倒计时、试判定。登录或后台任务进行中时每秒刷新一次状态。
+  LLM 推翻拦截）、复核规则、附加提示词（系统默认复核提示词与拒绝策略；复核关闭时与规则一同隐藏）、
+  询问倒计时、判定记录（“记录判定”开关与“查看记录”）、试判定。登录或后台任务进行中时每秒刷新一次状态。
+- **判定记录页**（`client/records.tsx`）：在设置页内替换显示，带返回链接。按判定结果（全部 / 放行 / 需确认 /
+  拦下 / 失败）、只看已标记与工作区筛选，每页 50 条并可加载更多；每条显示调用摘要、结论与结局标签、时间与
+  工作区，详细信息含各项事实与原始参数，带模型输入的记录可标记“应为”放行 / 需确认 / 拦下（再点一次取消）。
+  “导出已标记（N）”在浏览器中下载 JSONL；“清除”经确认对话框删除全部记录。记录关闭时页首提示不会写入新记录。
 - **输入框快捷卡**（`client/quick.tsx`）：`conversation.input.right`（order 10，模型选择器左侧）显示一个带状态点的
-  “自动审批”标签（未受管控时为“未启用”，无人值守时为“无人值守”），点开为卡片：判定模型、锁定端点、复核 LLM、
-  允许 LLM 推翻拦截、询问倒计时、本会话的无人值守开关，以及跳到完整设置的链接。
+  “自动审批”标签（未受管控时为“未启用”，无人值守时为“无人值守”），点开为卡片，参照 Vulcan Code 的自动审批菜单：
+  类别授权（三个勾选项，勾选即对应授权选项为 `allow`，取消为 `review` / `confirm`，作用于所有会话）；受管控时
+  的“复核附加提示词”与“无人值守：已开启 / 关闭”两个入口（会话尚未建立时不可用），各自打开对话框：前者显示
+  来源（跟随系统默认值 / 本会话自定义），可“跟随系统默认值”或“保存为本会话提示词”；后者预填本会话策略或
+  系统默认拒绝策略，可“开启 / 更新策略 / 关闭”；随后为判定模型、锁定端点、复核 LLM、允许 LLM 推翻拦截、
+  询问倒计时，以及跳到完整设置的链接。
 - **与权限预设的关系**：dsh 的权限预设表只有配置预设与一个固定的 `auto` 槽位；`auto` 同时只能由一个集成
   注册，组合固定为 `danger-full-access` 沙箱加 `ask` 审批。`registerAuto(admit)` 不接受说明文字，选择 Auto
   时的确认对话框文字由 dsh 固定，描述的是 dsh 自带 Auto review 的行为。
@@ -364,6 +393,12 @@ docs/
   对话框 5 次全部成功并显示各阶段耗时、区域、模型、策略与分数，Esc 只关闭对话框；锁定到较慢节点后表格与
   快捷卡都显示已锁定；会话切到“自动审查”后标签变为受管控，快捷卡中打开无人值守后标签显示“无人值守”；深色
   主题正常。
+- **判定记录与快捷卡菜单**（2026-10-27，0.2.1）：插件单元测试 35 项通过（新增：记录存储的保留、压缩、分页、
+  标记与导出，记录路由的筛选与参数校验，两条会话记录的投影）。隔离 `DSH_HOME` 端到端：快捷卡三个类别授权
+  默认值正确且勾选即保存；`git status` 记为 `judge_allowed`，`DROP DATABASE` 拒绝与允许分别记为
+  `user_denied` 与 `user_allowed`；复核依次收到系统默认与本会话的附加提示词（保留换行）；无人值守对话框预填
+  系统默认拒绝策略，开启后标签显示“无人值守”，`DROP DATABASE` 记为 `unattended_denied` 且复核收到本会话
+  拒绝策略；记录页筛选、标记、只看已标记、导出（1 条 `block` 样本，字段与 Vulcan Code 相同）与清除均正常。
 - **Windows 路径长度**：数据目录较深时 torch 运行包的 pip 安装因路径超过 259 字符失败，已改为安装前检查并
   报告可用长度。
 - **此前已验证、本次未改动的部分**：复核、规则与无人值守的结论映射，冲突提示与 Auto 接管，设置页深色模式，
