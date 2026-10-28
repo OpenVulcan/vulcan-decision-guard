@@ -19,7 +19,7 @@ import path from 'node:path'
 
 import { fetchPinned, matches, sha256Of } from '../download.js'
 import { writeFileAtomic, type DecisionHome } from '../home.js'
-import type { Backend } from './packs.js'
+import type { Backend, PackId } from './packs.js'
 import { replaceDirectory } from './packs.js'
 import type { ModelFormat } from './worker.js'
 
@@ -36,7 +36,17 @@ export interface PublishedRepository {
   readonly repo: string
   /** A commit, never a branch, so the files cannot change under the pins. */
   readonly revision: string
-  /** SHA-256 of the repository's `manifest.json`. */
+}
+
+/** Precisions the runtime packages are published in. */
+export const PACKAGE_PRECISIONS = ['fp16', 'fp32'] as const
+export type PackagePrecision = typeof PACKAGE_PRECISIONS[number]
+
+/** One package directory of the runtime repository, identical on every hub. */
+export interface RuntimePackage {
+  /** Directory inside the repository, such as `mini/fp16`. */
+  readonly path: string
+  /** SHA-256 of the package's `MANIFEST.json`. */
   readonly manifestSha256: string
 }
 
@@ -45,27 +55,57 @@ export interface CatalogModel {
   readonly name: string
   readonly parameters: string
   readonly format: ModelFormat
-  /** Peak GPU memory measured with the recommended format, when known. */
-  readonly peakGpuMemoryGiB?: number
-  /** Download addresses; null until the model is published there. */
-  readonly sources: Readonly<Record<ModelSource, PublishedRepository | null>>
+  /** The ONNX packages published for this family, by precision. */
+  readonly packages: Readonly<Partial<Record<PackagePrecision, RuntimePackage>>>
 }
 
-/** Published local models. The addresses are filled in when each model is released. */
+/**
+ * The vulcan-decision-shell-v1-runtime repository on each hub, holding every catalog package;
+ * null until it is published there.
+ */
+export const RUNTIME_SOURCES: Readonly<Record<ModelSource, PublishedRepository | null>> = {
+  'huggingface': { repo: 'openvulcan/vulcan-decision-shell-v1-runtime', revision: 'fd5e1d09f54df4133956bb9e192ac7771401d7d7' },
+  'modelscope-intl': null,
+  'modelscope-cn': { repo: 'OpenVulcan/vulcan-decision-shell-v1-runtime', revision: 'e96d96744c20f691ea6045cf21c232cbc8fa8e09' },
+}
+
+/** Published local models: ONNX packages of the runtime repository. */
 export const MODEL_CATALOG: readonly CatalogModel[] = [
   {
-    family: 'mini', name: 'vulcan-decision-shell-v1-mini', parameters: '0.2B', format: 'torch-release', peakGpuMemoryGiB: 2.46,
-    sources: { 'huggingface': null, 'modelscope-intl': null, 'modelscope-cn': null },
+    family: 'mini', name: 'vulcan-decision-shell-v1-mini', parameters: '0.2B', format: 'onnx-delivery',
+    packages: {
+      fp16: { path: 'mini/fp16', manifestSha256: 'dc57ba263b4b32c1443b78b42ce81371aed85f93fb3f3afd5e5f77afd059dbf9' },
+      fp32: { path: 'mini/fp32', manifestSha256: 'eb3d48b93d030b9f67bbcf7fcea1179b854287b44e5c16b72a8e0be9694c194e' },
+    },
   },
   {
-    family: 'flash', name: 'vulcan-decision-shell-v1-flash', parameters: '0.35B', format: 'torch-release',
-    sources: { 'huggingface': null, 'modelscope-intl': null, 'modelscope-cn': null },
+    family: 'flash', name: 'vulcan-decision-shell-v1-flash', parameters: '0.35B', format: 'onnx-delivery',
+    packages: {
+      fp16: { path: 'flash/fp16', manifestSha256: '075e61a05063272b13d966c1f9b6e55ce99acbf5055de16b675ae1b442e6ffed' },
+      fp32: { path: 'flash/fp32', manifestSha256: '6b652427b61922ea573fd3509ed41b47cbc6037ffa47db7d6edf325cd12c4374' },
+    },
   },
   {
-    family: 'standard', name: 'vulcan-decision-shell-v1', parameters: '0.8B', format: 'torch-release',
-    sources: { 'huggingface': null, 'modelscope-intl': null, 'modelscope-cn': null },
+    family: 'standard', name: 'vulcan-decision-shell-v1', parameters: '0.8B', format: 'onnx-delivery',
+    packages: {
+      fp16: { path: 'standard/fp16', manifestSha256: 'de1d7e101998b4ac978038c2ae3251a0fdb86567ec22b263fe7cec5b76b26ade' },
+    },
   },
 ]
+
+/** The hubs `model` can be downloaded from. */
+export function sourcesOf(model: CatalogModel): ModelSource[] {
+  return Object.keys(model.packages).length === 0 ? [] : MODEL_SOURCES.filter(source => RUNTIME_SOURCES[source] !== null)
+}
+
+/**
+ * The precision to download: fp16 where the CUDA ONNX pack runs, fp32 on the CPU, or the only
+ * precision published.
+ */
+export function preferredPrecision(model: CatalogModel, onnxPack: PackId): PackagePrecision | undefined {
+  const preferred: PackagePrecision = onnxPack === 'onnx-cuda' ? 'fp16' : 'fp32'
+  return model.packages[preferred] === undefined ? PACKAGE_PRECISIONS.find(precision => model.packages[precision] !== undefined) : preferred
+}
 
 /** The backend a package format runs on. */
 export function backendOf(format: ModelFormat): Backend {
@@ -99,7 +139,7 @@ export interface InstalledModel {
   readonly package_format: ModelFormat
   readonly bytes: number
   readonly installed_at: string
-  readonly source: { readonly kind: 'directory'; readonly path: string } | { readonly kind: 'download'; readonly source: ModelSource; readonly repo: string; readonly revision: string }
+  readonly source: { readonly kind: 'directory'; readonly path: string } | { readonly kind: 'download'; readonly source: ModelSource; readonly repo: string; readonly revision: string; readonly path: string }
   readonly files: Readonly<Record<string, FileDigest>>
 }
 
@@ -211,27 +251,28 @@ export async function installModelFromDirectory(home: DecisionHome, dir: string,
 }
 
 /**
- * Download and install a published catalog model from `source`.
- * @throws Error when the model has no address at that source yet.
+ * Download and install the `precision` package of a published catalog model from `source`.
+ * @throws Error when that package or the runtime repository is not published there yet.
  */
-export async function downloadModel(home: DecisionHome, family: ModelFamily, source: ModelSource, options: ModelInstallOptions = {}): Promise<InstalledModel> {
-  const entry = MODEL_CATALOG.find(model => model.family === family)
-  const published = entry?.sources[source]
-  if (entry === undefined || published === null || published === undefined) {
-    throw new Error(`${family} is not published on ${source} yet; install it from a directory instead`)
-  }
-  const response = await fetch(repositoryFileUrl(source, published, 'manifest.json'), options.signal === undefined ? {} : { signal: options.signal })
-  if (!response.ok) throw new Error(`cannot download manifest.json: HTTP ${response.status}`)
+export async function downloadModel(home: DecisionHome, family: ModelFamily, precision: PackagePrecision, source: ModelSource, options: ModelInstallOptions = {}): Promise<InstalledModel> {
+  const pinned = MODEL_CATALOG.find(model => model.family === family)?.packages[precision]
+  if (pinned === undefined) throw new Error(`${family} has no published ${precision} package`)
+  const published = RUNTIME_SOURCES[source]
+  if (published === null) throw new Error(`the runtime packages are not published on ${source} yet; install one from a directory instead`)
+  const url = (file: string) => repositoryFileUrl(source, published, `${pinned.path}/${file}`)
+  const response = await fetch(url('MANIFEST.json'), options.signal === undefined ? {} : { signal: options.signal })
+  if (!response.ok) throw new Error(`cannot download MANIFEST.json: HTTP ${response.status}`)
   const manifestText = await response.text()
   const digest = createHash('sha256').update(manifestText, 'utf8').digest('hex')
-  if (digest !== published.manifestSha256) throw new Error('the published manifest.json does not match its pin')
-  const declaration = declarationOf('manifest.json', manifestText)
-  const work = path.join(home.downloads, `model-${published.manifestSha256.slice(0, 16)}`)
-  return await installPackage(home, { ...declaration, family }, 'manifest.json', manifestText,
-    { kind: 'download', source, repo: published.repo, revision: published.revision },
+  if (digest !== pinned.manifestSha256) throw new Error('the published MANIFEST.json does not match its pin')
+  const declaration = declarationOf('MANIFEST.json', manifestText)
+  if (declaration.family !== family) throw new Error(`${pinned.path}/MANIFEST.json declares the ${String(declaration.family)} family`)
+  const work = path.join(home.downloads, `model-${pinned.manifestSha256.slice(0, 16)}`)
+  return await installPackage(home, declaration, 'MANIFEST.json', manifestText,
+    { kind: 'download', source, repo: published.repo, revision: published.revision, path: pinned.path },
     async (file, dest, digest) => {
       const cached = path.join(work, ...file.split('/'))
-      await fetchPinned({ name: file, url: repositoryFileUrl(source, published, file), ...digest }, cached,
+      await fetchPinned({ name: file, url: url(file), ...digest }, cached,
         options.signal === undefined ? {} : { signal: options.signal })
       fs.renameSync(cached, dest)
     }, options).finally(() => fs.rmSync(work, { recursive: true, force: true }))

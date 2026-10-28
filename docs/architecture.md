@@ -180,9 +180,11 @@ Arguments: <实际参数的紧凑 JSON，键保持原顺序>
 安装（从本地目录或下载）时每个文件都按包自带清单的大小与 SHA-256 校验，写入临时目录，全部通过才换入；
 清单中的路径只允许普通相对路径。
 
-**下载点**：每个系列各有三处——Hugging Face、魔搭国际站（modelscope.ai）、魔搭国内站（modelscope.cn）。
-目录中按提交（不是分支）固定仓库与 `manifest.json` 的 SHA-256，地址发布前为空，此时下载报错并指向从本地
-目录安装。
+**下载**：`MODEL_CATALOG` 只列 `vulcan-decision-shell-v1-runtime` 仓库中的 ONNX 包（每个系列按精度给出包目录
+与其 `MANIFEST.json` 的 SHA-256，各平台字节相同）；`RUNTIME_SOURCES` 按提交（不是分支）固定该仓库在
+Hugging Face、魔搭国际站（modelscope.ai）、魔搭国内站（modelscope.cn）上的位置，尚未发布的平台为空，此时下载
+报错并指向从本地目录安装。面板按硬件建议选精度：`onnx-cuda` 可用时下载 fp16，否则 fp32，只发布一种精度时
+用那一种；命令行可用 `--precision` 指定。PyTorch 发布版仍可从本地目录安装，但不提供下载。
 
 ## 六、命令行
 
@@ -194,7 +196,7 @@ Arguments: <实际参数的紧凑 JSON，键保持原顺序>
 | `login [--site cn\|global]` / `logout` / `account` | OpenVulcan 登录、退出（注销设备）、查看账号 |
 | `cloud models` / `cloud probe [--model <id>]` | 账号可用的云端模型；测量节点 |
 | `packs` / `packs install <运行包> [--source official\|cn]` / `packs remove <运行包>` | 运行包管理 |
-| `models` / `models install <目录>` / `models download <mini\|flash\|standard> --from <来源>` / `models remove <id>` | 模型管理 |
+| `models` / `models install <目录>` / `models download <mini\|flash\|standard> --from <来源> [--precision fp16\|fp32]` / `models remove <id>` | 模型管理 |
 | `judge --tool <名> --args <json> [--project <目录>] [--cloud <模型> \| --pack <运行包> --model <id>]` | 判定一次调用 |
 | `eval --input <文件> --pack <运行包> --model <id>` | 在本机对已渲染的输入批量打分（调试与对照） |
 
@@ -418,7 +420,7 @@ docs/
 
 ## 十一、待决定与待调查
 
-1. 本机模型三个系列在三处下载点的地址（发布后填入 `MODEL_CATALOG`）。
+1. runtime 仓库在三处下载点的提交（发布后填入 `RUNTIME_SOURCES`）。
 2. NPU 运行包：等待为 Intel（OpenVINO）与 Qualcomm（QNN）导出的 ONNX 模型；AMD NPU 暂无计划。
 3. dsh 接入方式的默认值：目前为自动预设。
 4. 运行包锁文件的更新节奏（Python、onnxruntime、torch 的安全更新）。

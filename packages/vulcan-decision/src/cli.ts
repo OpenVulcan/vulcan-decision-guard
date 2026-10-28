@@ -13,7 +13,7 @@ import { DecisionEngine } from './engine.js'
 import { detectHardware, gpuGeneration, recommend } from './hardware.js'
 import { defaultHome, type DecisionHome } from './home.js'
 import { LocalEngine } from './local/engine.js'
-import { backendOf, downloadModel, installModelFromDirectory, listModels, MODEL_CATALOG, MODEL_FAMILIES, MODEL_SOURCES, removeModel, type ModelFamily, type ModelSource } from './local/models.js'
+import { backendOf, downloadModel, installModelFromDirectory, listModels, MODEL_CATALOG, MODEL_FAMILIES, MODEL_SOURCES, PACKAGE_PRECISIONS, preferredPrecision, removeModel, sourcesOf, type ModelFamily, type ModelSource, type PackagePrecision } from './local/models.js'
 import { installPack, installedPack, isPackId, PACK_IDS, PLANNED_PACKS, readLock, removePack, type PackId } from './local/packs.js'
 import { DEFAULT_OPTIONS, DecisionError, type JudgeInput } from './protocol.js'
 import { VERSION } from './version.js'
@@ -186,8 +186,8 @@ async function runModels(home: DecisionHome, args: readonly string[]): Promise<n
   if (sub === undefined) {
     for (const model of listModels(home)) console.log(`installed  ${model.id}  ${model.package_format}  ${(model.bytes / 1024 ** 2).toFixed(0)} MiB`)
     for (const model of MODEL_CATALOG) {
-      const sources = MODEL_SOURCES.filter(source => model.sources[source] !== null)
-      console.log(`published  ${model.family} (${model.name}, ${model.parameters})  ${sources.length === 0 ? 'no download address yet' : sources.join(', ')}`)
+      const sources = sourcesOf(model)
+      console.log(`published  ${model.family} (${model.name}, ${model.parameters}, ${Object.keys(model.packages).join('/')})  ${sources.length === 0 ? 'no download address yet' : sources.join(', ')}`)
     }
     return 0
   }
@@ -197,10 +197,14 @@ async function runModels(home: DecisionHome, args: readonly string[]): Promise<n
     return 0
   }
   if (sub === 'download' && target !== undefined) {
-    const { values } = parseArgs({ args: rest, options: { from: { type: 'string' } } })
-    if (!(MODEL_FAMILIES as readonly string[]).includes(target)) throw new Error(`unknown model ${target}; known: ${MODEL_FAMILIES.join(', ')}`)
+    const { values } = parseArgs({ args: rest, options: { from: { type: 'string' }, precision: { type: 'string' } } })
+    const entry = MODEL_CATALOG.find(model => model.family === target)
+    if (entry === undefined) throw new Error(`unknown model ${target}; known: ${MODEL_FAMILIES.join(', ')}`)
     if (!(MODEL_SOURCES as readonly (string | undefined)[]).includes(values.from)) throw new Error(`--from must be one of ${MODEL_SOURCES.join(', ')}`)
-    const model = await downloadModel(home, target as ModelFamily, values.from as ModelSource, { onProgress: progress })
+    if (values.precision !== undefined && !(PACKAGE_PRECISIONS as readonly string[]).includes(values.precision)) throw new Error(`--precision must be one of ${PACKAGE_PRECISIONS.join(', ')}`)
+    const precision = values.precision as PackagePrecision | undefined ?? preferredPrecision(entry, recommend(detectHardware()).onnxPack)
+    if (precision === undefined) throw new Error(`${entry.family} has no published package`)
+    const model = await downloadModel(home, entry.family, precision, values.from as ModelSource, { onProgress: progress })
     console.log(`installed ${model.id}`)
     return 0
   }
@@ -208,7 +212,7 @@ async function runModels(home: DecisionHome, args: readonly string[]): Promise<n
     console.log(removeModel(home, target) ? `removed ${target}` : `${target} was not installed`)
     return 0
   }
-  throw new Error('usage: models [install <dir> | download <family> --from <source> | remove <id>]')
+  throw new Error('usage: models [install <dir> | download <family> --from <source> [--precision fp16|fp32] | remove <id>]')
 }
 
 async function runJudge(home: DecisionHome, args: readonly string[]): Promise<number> {

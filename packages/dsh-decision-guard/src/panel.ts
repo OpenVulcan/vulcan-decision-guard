@@ -13,7 +13,7 @@ import { credentialKey, type CredentialRecord } from '@deepseek-ai/dsh-credentia
 import {
   DECISIONS, DecisionEngine, DecisionError, DOWNLOAD_SOURCES, MODEL_CATALOG, MODEL_FAMILIES, MODEL_SOURCES, PACK_IDS, PLANNED_PACKS,
   detectHardware, gpuGeneration, installModelFromDirectory, installPack, installedPack, isPackId, isSite, listModels, parseCredential,
-  readLock, recommend, removeModel, removePack, downloadModel,
+  preferredPrecision, readLock, recommend, removeModel, removePack, downloadModel, sourcesOf,
   type Credential, type CredentialStore, type Decision, type DecisionHome, type DownloadSource, type EngineSettings, type ModelFamily, type ModelSource,
   type EndpointSnapshot, type PendingSignIn, type TestInput, type TestResult, type Verdict,
 } from '@openvulcan/vulcan-decision'
@@ -126,7 +126,7 @@ export class Panel {
       })),
       catalog: MODEL_CATALOG.map(model => ({
         family: model.family, name: model.name, parameters: model.parameters, format: model.format,
-        sources: MODEL_SOURCES.filter(source => model.sources[source] !== null),
+        sources: sourcesOf(model),
       })),
       local: this.engine.local.status(),
       job: this.job ?? null,
@@ -232,7 +232,10 @@ export class Panel {
   downloadModel(family: string | null, source: string | null): Job {
     if (!(MODEL_FAMILIES as readonly (string | null)[]).includes(family)) throw new DecisionError('invalid_request', `model must be one of ${MODEL_FAMILIES.join(', ')}`)
     if (!(MODEL_SOURCES as readonly (string | null)[]).includes(source)) throw new DecisionError('invalid_request', `source must be one of ${MODEL_SOURCES.join(', ')}`)
-    return this.run('model-download', family!, signal => downloadModel(this.home, family as ModelFamily, source as ModelSource, {
+    const model = MODEL_CATALOG.find(entry => entry.family === family)!
+    const precision = preferredPrecision(model, recommend(detectHardware()).onnxPack)
+    if (precision === undefined) throw new DecisionError('invalid_request', `${model.family} has no published package`)
+    return this.run('model-download', family!, signal => downloadModel(this.home, model.family, precision, source as ModelSource, {
       signal,
       onProgress: (done, total) => this.update({ phase: 'download', done, total }),
     }))
