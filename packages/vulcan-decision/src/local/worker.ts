@@ -28,11 +28,25 @@ export interface ProbeResult {
 
 export type ModelFormat = 'onnx-delivery' | 'torch-release'
 
+/** Request and batch limits an ONNX package declares in its `runtime-config.json`. */
+export interface BatchLimits {
+  /** Longest call in tokens; longer calls are answered as over the limit, not evaluated. */
+  readonly max_tokens: number
+  /** Most calls one `judge` request may carry; the host splits larger groups. */
+  readonly max_request_items: number
+  /** Most rows one graph run takes. */
+  readonly micro_batch: number
+  /** Most padded tokens (rows times the longest row) one graph run takes. */
+  readonly padded_batch_tokens: number
+}
+
 export interface LoadResult {
   readonly load_seconds: number
   readonly format: ModelFormat
   readonly root: string
   readonly device: string
+  /** Present for ONNX packages; a torch release batches on its own. */
+  readonly limits?: BatchLimits
 }
 
 /** Longest wait for a probe. */

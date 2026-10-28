@@ -5,8 +5,9 @@
  * - `torch-release`: a published model repository (`manifest.json`, `decision.py`, `runtime/`,
  *   `tokenizer/`, `weights/`). Only the files needed to run it with its recommended fp32 weights
  *   are installed; training records, evaluation data and experimental weight formats are skipped.
- * - `onnx-delivery`: an ONNX package (`MANIFEST.json`, `runtime-config.json`, `assets/`, the graph
- *   and its weights), installed whole.
+ * - `onnx-delivery`: a package of the vulcan-decision-shell-v1-runtime repository (`MANIFEST.json`
+ *   format 2 naming its family and format, `runtime-config.json`, `assets/`, `model.onnx`),
+ *   installed whole.
  *
  * Every installed file is checked against the package's own manifest while it is copied or
  * downloaded, into a staging directory that replaces the installed package only when complete.
@@ -112,6 +113,9 @@ interface PackageDeclaration {
   readonly files: Readonly<Record<string, FileDigest>>
 }
 
+/** The only `MANIFEST.json` format of ONNX packages this version reads. */
+const ONNX_MANIFEST_FORMAT = 2
+
 /** Files of a torch release that running it needs, besides the recommended weights. */
 const TORCH_RUNTIME_PATHS = [/^decision\.py$/, /^runtime\//, /^tokenizer\//, /^weights\/formats\.json$/, /^weights\/fp32\//,
   /^(LICENSE|LICENSE-DATA\.md|NOTICE\.md|README(\.zh)?\.md|config\.json|configuration\.json)$/, /^licenses\//]
@@ -129,13 +133,19 @@ export function declarationOf(manifestName: string, text: string): PackageDeclar
     }
     return { id: name, name, format: 'torch-release', files: selected }
   }
-  const modelFile = manifest.model_file
-  if (typeof modelFile !== 'string' || files[modelFile] === undefined) throw new Error('MANIFEST.json names no listed model file')
-  for (const required of ['runtime-config.json', 'assets/policy-v2.json', 'assets/tokenizer.json']) {
+  if (manifest.format_version !== ONNX_MANIFEST_FORMAT) {
+    throw new Error(`MANIFEST.json format ${String(manifest.format_version)} is not supported; use a vulcan-decision-shell-v1-runtime package`)
+  }
+  const family = MODEL_FAMILIES.find(known => known === manifest.family)
+  const format = manifest.format
+  if (family === undefined || typeof format !== 'string' || !/^[a-z0-9][a-z0-9-]{0,31}$/.test(format)) {
+    throw new Error('MANIFEST.json names no known family and format')
+  }
+  for (const required of ['runtime-config.json', 'assets/policy-v2.json', 'assets/tokenizer.json', 'model.onnx']) {
     if (files[required] === undefined) throw new Error(`MANIFEST.json does not list ${required}`)
   }
-  const stem = path.posix.basename(modelFile).replace(/\.onnx$/, '').toLowerCase().replace(/[^a-z0-9.-]+/g, '-')
-  return { id: `${stem}-${files[modelFile].sha256.slice(0, 8)}`, name: stem, format: 'onnx-delivery', files }
+  const name = `vulcan-decision-shell-v1-${family}-${format}`
+  return { id: name, name, format: 'onnx-delivery', family, files }
 }
 
 /** The files a manifest lists, refusing any path that is not a plain relative path with `/`. */

@@ -28,15 +28,18 @@ test('a torch release installs its runtime subset with the fp32 weights only', (
   ])
 })
 
-test('an ONNX delivery is named after its model file and digest', () => {
+test('a runtime package is named after its family and format', () => {
   const declaration = declarationOf('MANIFEST.json', JSON.stringify({
-    model_file: 'models/risk164-attention-fp32.onnx',
+    format_version: 2, family: 'flash', format: 'fp16',
     files: {
-      'models/risk164-attention-fp32.onnx': { bytes: 1, sha256: '5a4c35b5'.padEnd(64, '0') },
-      'runtime-config.json': digest(1), 'assets/policy-v2.json': digest(1), 'assets/tokenizer.json': digest(1),
+      'model.onnx': digest(9), 'runtime-config.json': digest(1), 'assets/policy-v2.json': digest(1), 'assets/tokenizer.json': digest(1),
     },
   }))
   assert.equal(declaration.format, 'onnx-delivery')
-  assert.equal(declaration.id, 'risk164-attention-fp32-5a4c35b5')
-  assert.throws(() => declarationOf('MANIFEST.json', JSON.stringify({ model_file: 'missing.onnx', files: {} })), /names no listed model file/)
+  assert.equal(declaration.id, 'vulcan-decision-shell-v1-flash-fp16')
+  assert.equal(declaration.family, 'flash')
+  const older = { format_version: 1, family: 'flash', format: 'fp16', files: {} }
+  assert.throws(() => declarationOf('MANIFEST.json', JSON.stringify(older)), /format 1 is not supported/)
+  const unknown = { format_version: 2, family: 'huge', format: 'fp16', files: {} }
+  assert.throws(() => declarationOf('MANIFEST.json', JSON.stringify(unknown)), /no known family/)
 })

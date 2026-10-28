@@ -167,8 +167,15 @@ Arguments: <实际参数的紧凑 JSON，键保持原顺序>
 - `torch-release`：已发布的模型仓库（`manifest.json`、`decision.py`、`runtime/`、`tokenizer/`、`weights/`）。只安装
   运行所需的文件与推荐的 fp32 权重，跳过训练记录、评测数据与实验性权重格式；推理由仓库自带的
   `decision.py` 完成，结果与发布物一致。在 `torch-*` 运行包上运行。
-- `onnx-delivery`：ONNX 交付包（`MANIFEST.json`、`runtime-config.json`、`assets/`、图与权重），整体安装，id 为
-  `<图文件名>-<图 SHA-256 前 8 位>`。在 `onnx-*` 运行包上运行。
+- `onnx-delivery`：`vulcan-decision-shell-v1-runtime` 仓库中的一个包（`MANIFEST.json` 格式 2，`runtime-config.json`、
+  `assets/`、`model.onnx`），整体安装，id 为 `vulcan-decision-shell-v1-<系列>-<格式>`。在 `onnx-*` 运行包上运行。
+  三个系列的计算图接口相同（`input_ids`、`attention_mask` → `logits`），文本编码按 `runtime-config.json` 的
+  `encoding` 执行；包只在其 `devices` 声明的设备上加载（mini 的 fp16 只用于 CUDA）。
+
+**批量。** ONNX 包的加载结果带回 `limits`（`max_tokens`、`max_request_items`、`micro_batch`、
+`padded_batch_tokens`，取自 `runtime-config.json`）。本机后端忙时到达的调用排队，下一次一并提交，超过
+`max_request_items` 时拆成多个请求；worker 按长度排序，每次运行不超过 `micro_batch` 行与 `padded_batch_tokens`
+个填充词元。
 
 安装（从本地目录或下载）时每个文件都按包自带清单的大小与 SHA-256 校验，写入临时目录，全部通过才换入；
 清单中的路径只允许普通相对路径。
