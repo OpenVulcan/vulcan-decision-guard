@@ -35,10 +35,10 @@ dsh plugin add @openvulcan/dsh-decision-guard
 
 > **Notre engagement : le modèle cloud de décision sur les commandes est gratuit, de façon permanente.** (27 octobre 2026)
 
-> **Statut : préversion v1.** Les décisions sont encore en cours de calibrage. C'est une couche de plus au-dessus
-> d'un bac à sable, pas un remplacement de celui-ci. Les adresses de téléchargement des modèles locaux ne sont pas
-> encore publiées ; pour l'instant, les modèles locaux s'installent depuis un dossier local. Notes de conception et
-> de vérification : [docs/architecture.md](docs/architecture.md).
+> **Statut : préversion v1.** Les décisions sont encore en cours de calibrage. C'est une couche de plus au-dessus d'un
+> bac à sable, pas un remplacement de celui-ci. Les modèles locaux se téléchargent depuis Hugging Face ou ModelScope
+> (site chinois), ou s'installent depuis un dossier local ; le site international de ModelScope suivra. Notes de
+> conception et de vérification : [docs/architecture.md](docs/architecture.md).
 
 ## 🤔 Pourquoi un modèle de décision
 

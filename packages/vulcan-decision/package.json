@@ -1,6 +1,6 @@
 {
   "name": "@openvulcan/vulcan-decision",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Vulcan Decision: judge AI coding tool calls before they run, with OpenVulcan cloud endpoints or an optional local model runtime.",
   "license": "MIT",
   "repository": {

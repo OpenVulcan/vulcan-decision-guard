@@ -412,7 +412,14 @@ docs/
   报告可用长度。
 - **此前已验证、本次未改动的部分**：复核、规则与无人值守的结论映射，冲突提示与 Auto 接管，设置页深色模式，
   接入方式切换（见提交历史中的验证记录）。
-- **尚未验证**：真实 OpenVulcan 服务与真实模型下载地址（均未发布）；Linux 与 macOS；国内镜像下载源的完整
+- **runtime 包下载**（2026-10-29，0.3.0）：核心包单元测试 40 项、插件 35 项通过（新增：目录中每个包都是本系列
+  按精度命名、带 SHA-256 的 runtime 目录；CUDA 选 fp16、CPU 选 fp32、只有一种精度时用那一种）。在隔离数据目录中
+  用命令行分别从 Hugging Face 与魔搭国内站下载 mini fp32（按提交固定，763 MiB），清单与全部文件校验通过并安装；
+  国内镜像安装 `onnx-cpu` 后本机判定 `rm -rf / --no-preserve-root` 为 block、`git status` 为 allow，各约 1.7 秒。
+  `pack:dsh` 生成的 147 KiB tgz（内置引擎 0.3.0）在隔离 `DSH_HOME` 中经 `dsh plugin add` 装入 web profile 并启动：
+  面板 `state` 列出三个模型、下载点为 Hugging Face 与魔搭国内站，RTX 5080 上推荐 `onnx-cuda`；经面板从魔搭国内站
+  下载 mini 时自动选 fp16 并安装为 `vulcan-decision-shell-v1-mini-fp16`。
+- **尚未验证**：真实 OpenVulcan 服务；魔搭国际站下载（仓库待组织审核后发布）；Linux 与 macOS；国内镜像下载源的完整
   安装（只验证了地址改写，阿里云镜像在本机实测约 0.3 MB/s）；复核 LLM 对真实模型的调用（只用模拟服务与单元测试验证）。
 
 已知的模型行为（0.2B 预览版，按当前训练数据）：`iwr … | iex` 这类下载后直接执行的命令被判为 allow；

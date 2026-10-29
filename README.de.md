@@ -36,9 +36,9 @@ dsh plugin add @openvulcan/dsh-decision-guard
 > **Unser Versprechen: Das Cloud-Entscheidungsmodell für Befehle ist dauerhaft kostenlos.** (27. Oktober 2026)
 
 > **Status: v1-Vorschau.** Die Entscheidungen werden noch kalibriert. Dies ist eine zusätzliche Schicht über einer
-> Sandbox, kein Ersatz für sie. Download-Adressen für lokale Modelle sind noch nicht veröffentlicht; lokale Modelle
-> werden derzeit aus einem lokalen Ordner installiert. Hinweise zu Entwurf und Verifikation:
-> [docs/architecture.md](docs/architecture.md).
+> Sandbox, kein Ersatz für sie. Lokale Modelle werden von Hugging Face oder ModelScope (China-Website) heruntergeladen
+> oder aus einem lokalen Ordner installiert; die internationale ModelScope-Website folgt später. Hinweise zu Entwurf
+> und Verifikation: [docs/architecture.md](docs/architecture.md).
 
 ## 🤔 Warum ein Entscheidungsmodell
 

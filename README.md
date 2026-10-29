@@ -33,8 +33,9 @@ dsh plugin add @openvulcan/dsh-decision-guard
 
 > **我们承诺：云端命令判定模型永久免费提供。**（2026 年 10 月 27 日）
 
-> **状态：v1 预览版。** 判定仍在校准，它是沙箱之上的一道防线，不能取代沙箱。本机模型的下载地址尚未发布，
-> 本机模型暂时从本地目录安装。设计与验证记录见 [docs/architecture.md](docs/architecture.md)。
+> **状态：v1 预览版。** 判定仍在校准，它是沙箱之上的一道防线，不能取代沙箱。本机模型可从 Hugging Face
+> 或魔搭国内站下载，也可从本地目录安装；魔搭国际站稍后发布。设计与验证记录见
+> [docs/architecture.md](docs/architecture.md)。
 
 ## 🤔 为什么需要判定模型
 
