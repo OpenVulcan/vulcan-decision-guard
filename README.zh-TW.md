@@ -47,7 +47,7 @@ AI 代理完成一項任務往往要呼叫幾十到幾百次工具。對這些�
 讓通用 LLM 逐條審查也不理想：每次呼叫都要等幾秒、花一次 token，而且它讀的是同一段對話，容易被帶偏代理的
 同一段上下文說服。
 
-判定模型是只為這一件事訓練的小模型（0.2B 到 0.8B）。它只看三樣東西：專案目錄、工具名稱、實際參數，不讀對話，
+判定模型是只為這一件事訓練的小模型（0.2B 到 0.75B）。它只看三樣東西：專案目錄、工具名稱、實際參數，不讀對話，
 不讀 AI 的解釋，然後給出三個結論之一：**放行**、**需確認**、**攔下**。這樣一來：
 
 - 讀取檔案、執行測試、`git status`、建置這類日常呼叫在一次網路往返或一次本機推論內直接放行，你幾乎感覺不到它；
@@ -195,15 +195,15 @@ Arguments: <實際參數的精簡 JSON>
 
 ## 📊 評測
 
-2026 年 10 月，我們用同一個凍結的題庫，對 **`vulcan-decision-shell-v1`**（0.8B）與兩個外部判定服務
-做了一次性比較：JEV 1.14.0 與阿里雲判定模型 `decision-model-preview`。三者使用同一套固定英文策略、同樣完整的
+2026 年 10 月，我們用同一個凍結的題庫，對 **`vulcan-decision-shell-v1`**（0.75B）與兩個外部判定服務
+做了一次性比較：JEV 1.14.0 與阿里雲百煉判定模型 `bailian-decision-preview`。三者使用同一套固定英文策略、同樣完整的
 工具參數、專案目錄與固定授權選項，不補充任務描述，取最高分結論，不調門檻。
 
 先說清楚這組數字的限制：
 
 - 有標籤的題目來自我們自己的訓練與測試題庫，**其中很大一部分是我們訓練過的題**，這對我們明顯有利；
 - 參考標籤是我們定義的，不等於正式環境的絕對真值；
-- 數字只代表 `vulcan-decision-shell-v1`。預設的雲端 `vulcan-decision-shell-v1-mini`（0.2B）與 `vulcan-decision-shell-v1-flash`（0.35B）表現不同，這裡不代表它們；
+- 數字只代表雲端預設的 `vulcan-decision-shell-v1`。`vulcan-decision-shell-v1-flash`（0.36B）與 `vulcan-decision-shell-v1-mini`（0.2B）表現不同，這裡不代表它們；
 - 外部服務的結果只代表測試當時的版本。阿里雲的服務別名無法核對背後的權重版本。
 
 **有標籤題庫（106,501 筆輸入）**
@@ -277,9 +277,9 @@ OpenVulcan 依帳號提供；設定頁的端點表顯示各
 
 | 系列 | 模型名稱 | 參數量 | 說明 |
 | --- | --- | --- | --- |
-| mini | `vulcan-decision-shell-v1-mini` | 0.2B | 雲端預設 |
-| flash | `vulcan-decision-shell-v1-flash` | 0.35B | |
-| standard | `vulcan-decision-shell-v1` | 0.8B | 上面評測的模型，基於 Qwen3.5-0.8B-Base |
+| mini | `vulcan-decision-shell-v1-mini` | 0.2B | |
+| flash | `vulcan-decision-shell-v1-flash` | 0.36B | |
+| standard | `vulcan-decision-shell-v1` | 0.75B | 雲端預設；上面評測的模型，基於 Qwen3.5-0.8B-Base |
 
 ## 🔒 判定記錄與隱私
 

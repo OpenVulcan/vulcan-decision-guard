@@ -53,7 +53,7 @@ duas formas simples de lidar com elas, e ambas são ruins:
 Fazer um LLM genérico revisar cada chamada também não é o ideal: cada chamada espera vários segundos e gasta
 tokens, e o LLM lê a mesma conversa, então pode ser convencido pelo mesmo contexto que desviou o agente.
 
-O modelo de decisão é um modelo pequeno (de 0.2B a 0.8B) treinado para esta única tarefa. Ele vê apenas três
+O modelo de decisão é um modelo pequeno (de 0.2B a 0.75B) treinado para esta única tarefa. Ele vê apenas três
 coisas: a pasta do projeto, o nome da ferramenta e os argumentos reais. Ele nunca lê a conversa nem as explicações
 da IA. Ele responde com uma de três decisões: **allow**, **review** ou **block**. Como resultado:
 
@@ -236,8 +236,8 @@ indefinidamente pela sua resposta.
 ## 📊 Avaliação
 
 Em outubro de 2026, fizemos uma comparação única sobre um único banco de questões congelado entre o
-**`vulcan-decision-shell-v1`** (0.8B) e dois serviços de decisão externos: o JEV 1.14.0 e o modelo de
-decisão da Alibaba Cloud, `decision-model-preview`. Os três usaram a mesma política fixa em inglês, os mesmos
+**`vulcan-decision-shell-v1`** (0.75B) e dois serviços de decisão externos: o JEV 1.14.0 e o modelo de
+decisão da Alibaba Cloud Bailian, `bailian-decision-preview`. Os três usaram a mesma política fixa em inglês, os mesmos
 argumentos completos das ferramentas, a mesma pasta de projeto e as mesmas opções fixas de autorização, sem
 descrição da tarefa; foi tomada a decisão de maior pontuação e nenhum limiar foi ajustado.
 
@@ -246,7 +246,7 @@ Primeiro, os limites desses números:
 - As questões rotuladas vêm do nosso próprio banco de treinamento e de teste, e **grande parte delas são questões
   em que treinamos**, o que nos favorece claramente;
 - Os rótulos de referência são nossos; não são verdade absoluta para a produção;
-- Os números valem apenas para o `vulcan-decision-shell-v1`. O `vulcan-decision-shell-v1-mini` (0.2B) padrão na nuvem e o `vulcan-decision-shell-v1-flash` (0.35B) têm desempenho
+- Os números valem apenas para o `vulcan-decision-shell-v1`, o padrão na nuvem. O `vulcan-decision-shell-v1-flash` (0.36B) e o `vulcan-decision-shell-v1-mini` (0.2B) têm desempenho
   diferente e não estão representados aqui;
 - Os resultados externos refletem as versões disponíveis na época. O alias de serviço da Alibaba Cloud não nos
   permite verificar quais pesos estão por trás.
@@ -339,9 +339,9 @@ O `vulcan-decision-shell-v1` vem em três tamanhos, disponíveis tanto na nuvem 
 
 | Tamanho | Modelo | Parâmetros | Observações |
 | --- | --- | --- | --- |
-| mini | `vulcan-decision-shell-v1-mini` | 0.2B | Padrão na nuvem |
-| flash | `vulcan-decision-shell-v1-flash` | 0.35B | |
-| standard | `vulcan-decision-shell-v1` | 0.8B | O modelo avaliado acima; baseado no Qwen3.5-0.8B-Base |
+| mini | `vulcan-decision-shell-v1-mini` | 0.2B | |
+| flash | `vulcan-decision-shell-v1-flash` | 0.36B | |
+| standard | `vulcan-decision-shell-v1` | 0.75B | Padrão na nuvem. O modelo avaliado acima; baseado no Qwen3.5-0.8B-Base |
 
 ## 🔒 Registros de decisões e privacidade
 

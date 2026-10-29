@@ -51,7 +51,7 @@ them, and both are bad:
 Having a general LLM review every call is not ideal either: each call waits several seconds and spends tokens,
 and the LLM reads the same conversation, so it can be talked round by the same context that led the agent astray.
 
-The decision model is a small model (0.2B to 0.8B) trained for this one job. It sees only three things: the
+The decision model is a small model (0.2B to 0.75B) trained for this one job. It sees only three things: the
 project folder, the tool name and the actual arguments. It never reads the conversation or the AI's
 explanations. It answers with one of three decisions: **allow**, **review** or **block**. As a result:
 
@@ -223,8 +223,8 @@ indefinitely.
 
 ## 📊 Evaluation
 
-In October 2026 we ran a one-off comparison on a single frozen question bank between **`vulcan-decision-shell-v1`** (0.8B) and two external decision services: JEV 1.14.0 and Alibaba Cloud's decision model
-`decision-model-preview`. All three used the same fixed English policy, the same complete tool arguments, project
+In October 2026 we ran a one-off comparison on a single frozen question bank between **`vulcan-decision-shell-v1`** (0.75B) and two external decision services: JEV 1.14.0 and Alibaba Cloud Bailian's decision model
+`bailian-decision-preview`. All three used the same fixed English policy, the same complete tool arguments, project
 folder and fixed authorization options, with no task description; the highest-scoring decision was taken and no
 thresholds were tuned.
 
@@ -233,7 +233,7 @@ First, the limits of these numbers:
 - The labeled questions come from our own training and test bank, and **a large share of them are questions we
   trained on**, which clearly favors us;
 - The reference labels are ours; they are not absolute truth for production;
-- The numbers are for `vulcan-decision-shell-v1` only. The default cloud `vulcan-decision-shell-v1-mini` (0.2B) and `vulcan-decision-shell-v1-flash` (0.35B) perform differently and
+- The numbers are for `vulcan-decision-shell-v1`, the cloud default, only. `vulcan-decision-shell-v1-flash` (0.36B) and `vulcan-decision-shell-v1-mini` (0.2B) perform differently and
   are not represented here;
 - External results reflect the versions available at the time. Alibaba Cloud's service alias does not let us check
   which weights are behind it.
@@ -321,9 +321,9 @@ users in mainland China can pick the China mirror download source.
 
 | Size | Model | Parameters | Notes |
 | --- | --- | --- | --- |
-| mini | `vulcan-decision-shell-v1-mini` | 0.2B | Cloud default |
-| flash | `vulcan-decision-shell-v1-flash` | 0.35B | |
-| standard | `vulcan-decision-shell-v1` | 0.8B | The model evaluated above; based on Qwen3.5-0.8B-Base |
+| mini | `vulcan-decision-shell-v1-mini` | 0.2B | |
+| flash | `vulcan-decision-shell-v1-flash` | 0.36B | |
+| standard | `vulcan-decision-shell-v1` | 0.75B | Cloud default. The model evaluated above; based on Qwen3.5-0.8B-Base |
 
 ## 🔒 Decision records and privacy
 

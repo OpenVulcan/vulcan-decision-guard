@@ -50,7 +50,7 @@ AI 에이전트는 작업 하나를 끝내기 위해 수십 번에서 수백 번
 범용 LLM이 모든 호출을 검토하게 하는 방식도 이상적이지 않습니다. 호출마다 몇 초씩 기다려야 하고 토큰이
 소모되며, LLM이 같은 대화를 읽기 때문에 에이전트를 엉뚱한 방향으로 이끈 바로 그 맥락에 설득될 수 있습니다.
 
-판정 모델은 이 한 가지 일만을 위해 학습된 소형 모델(0.2B~0.8B)입니다. 모델이 보는 것은 프로젝트 폴더, 도구 이름,
+판정 모델은 이 한 가지 일만을 위해 학습된 소형 모델(0.2B~0.75B)입니다. 모델이 보는 것은 프로젝트 폴더, 도구 이름,
 실제 인자 세 가지뿐입니다. 대화나 AI의 설명은 읽지 않으며, 세 가지 판정 중 하나로 답합니다.
 **allow**(허용), **review**(검토), **block**(차단). 그 결과는 다음과 같습니다.
 
@@ -212,8 +212,8 @@ Arguments: <compact JSON of the actual arguments>
 
 ## 📊 평가
 
-2026년 10월, 고정된 하나의 문제 은행으로 **`vulcan-decision-shell-v1`** (0.8B)와 두 외부 판정 서비스인
-JEV 1.14.0, Alibaba Cloud의 판정 모델 `decision-model-preview`를 1회성으로 비교했습니다. 세 가지 모두 동일한
+2026년 10월, 고정된 하나의 문제 은행으로 **`vulcan-decision-shell-v1`** (0.75B)와 두 외부 판정 서비스인
+JEV 1.14.0, Alibaba Cloud Bailian의 판정 모델 `bailian-decision-preview`를 1회성으로 비교했습니다. 세 가지 모두 동일한
 고정 영어 정책, 동일한 전체 도구 인자, 프로젝트 폴더, 고정된 권한 부여 옵션을 사용했고 작업 설명은 없었으며,
 가장 높은 점수의 판정을 채택했고 임계값은 조정하지 않았습니다.
 
@@ -221,7 +221,7 @@ JEV 1.14.0, Alibaba Cloud의 판정 모델 `decision-model-preview`를 1회성�
 
 - 레이블이 있는 문제는 우리 자체의 학습 및 테스트 은행에서 나왔으며, **상당 부분이 우리가 학습한 문제**이므로 명백히 우리에게 유리합니다.
 - 기준 레이블은 우리가 정한 것이며, 운영 환경의 절대적 정답이 아닙니다.
-- 수치는 `vulcan-decision-shell-v1`에만 해당합니다. 기본 클라우드 `vulcan-decision-shell-v1-mini` (0.2B)와 `vulcan-decision-shell-v1-flash` (0.35B)는 성능이 다르며 여기에 반영되어 있지 않습니다.
+- 수치는 클라우드 기본값인 `vulcan-decision-shell-v1`에만 해당합니다. `vulcan-decision-shell-v1-flash` (0.36B)와 `vulcan-decision-shell-v1-mini` (0.2B)는 성능이 다르며 여기에 반영되어 있지 않습니다.
 - 외부 서비스 결과는 당시 이용 가능했던 버전을 반영합니다. Alibaba Cloud의 서비스 별칭으로는 뒤에 어떤 가중치가 있는지 확인할 수 없습니다.
 
 **레이블이 있는 문제 은행 (입력 106,501건)**
@@ -303,9 +303,9 @@ Apple)는 CPU 팩이나 클라우드를 사용합니다. 설정이 GPU, 드라�
 
 | 크기 | 모델 이름 | 파라미터 | 비고 |
 | --- | --- | --- | --- |
-| mini | `vulcan-decision-shell-v1-mini` | 0.2B | 클라우드 기본값 |
-| flash | `vulcan-decision-shell-v1-flash` | 0.35B | |
-| standard | `vulcan-decision-shell-v1` | 0.8B | 위에서 평가한 모델, Qwen3.5-0.8B-Base 기반 |
+| mini | `vulcan-decision-shell-v1-mini` | 0.2B | |
+| flash | `vulcan-decision-shell-v1-flash` | 0.36B | |
+| standard | `vulcan-decision-shell-v1` | 0.75B | 클라우드 기본값. 위에서 평가한 모델, Qwen3.5-0.8B-Base 기반 |
 
 ## 🔒 판정 기록과 개인정보
 

@@ -50,7 +50,7 @@ formas sencillas de gestionarlas, y ambas son malas:
 Que un LLM de propósito general revise cada llamada tampoco es ideal: cada llamada espera varios segundos y consume
 tokens, y el LLM lee la misma conversación, por lo que puede ser convencido por el mismo contexto que desvió al agente.
 
-El modelo de decisión es un modelo pequeño (de 0.2B a 0.8B) entrenado para esta única tarea. Solo ve tres cosas: la
+El modelo de decisión es un modelo pequeño (de 0.2B a 0.75B) entrenado para esta única tarea. Solo ve tres cosas: la
 carpeta del proyecto, el nombre de la herramienta y los argumentos reales. Nunca lee la conversación ni las
 explicaciones de la IA. Responde con una de tres decisiones: **allow** (permitir), **review** (revisar) o **block** (bloquear). Como resultado:
 
@@ -221,8 +221,8 @@ respuesta del usuario indefinidamente.
 
 ## 📊 Evaluación
 
-En octubre de 2026 realizamos una comparación puntual sobre un único banco de preguntas congelado entre **`vulcan-decision-shell-v1`** (0.8B) y dos servicios de decisión externos: JEV 1.14.0 y el modelo de decisión de Alibaba Cloud
-`decision-model-preview`. Los tres usaron la misma política fija en inglés, los mismos argumentos completos de las herramientas, la misma carpeta de
+En octubre de 2026 realizamos una comparación puntual sobre un único banco de preguntas congelado entre **`vulcan-decision-shell-v1`** (0.75B) y dos servicios de decisión externos: JEV 1.14.0 y el modelo de decisión de Alibaba Cloud Bailian
+`bailian-decision-preview`. Los tres usaron la misma política fija en inglés, los mismos argumentos completos de las herramientas, la misma carpeta de
 proyecto y las mismas opciones de autorización fijas, sin descripción de la tarea; se tomó la decisión de mayor puntuación y no se
 ajustó ningún umbral.
 
@@ -231,7 +231,7 @@ Primero, los límites de estas cifras:
 - Las preguntas etiquetadas proceden de nuestro propio banco de entrenamiento y de pruebas, y **buena parte de ellas son preguntas con las que
   entrenamos**, lo que nos favorece claramente;
 - Las etiquetas de referencia son nuestras; no son la verdad absoluta para producción;
-- Las cifras corresponden solo a `vulcan-decision-shell-v1`. El `vulcan-decision-shell-v1-mini` (0.2B) y el `vulcan-decision-shell-v1-flash` (0.35B) de la nube, que son los predeterminados, rinden de forma distinta y
+- Las cifras corresponden solo a `vulcan-decision-shell-v1`, el predeterminado en la nube. `vulcan-decision-shell-v1-flash` (0.36B) y `vulcan-decision-shell-v1-mini` (0.2B) rinden de forma distinta y
   no están representados aquí;
 - Los resultados externos reflejan las versiones disponibles en ese momento. El alias de servicio de Alibaba Cloud no permite comprobar
   qué pesos hay detrás.
@@ -318,9 +318,9 @@ los usuarios de China continental pueden elegir la fuente de descarga del espejo
 
 | Tamaño | Modelo | Parámetros | Notas |
 | --- | --- | --- | --- |
-| mini | `vulcan-decision-shell-v1-mini` | 0.2B | Predeterminado en la nube |
-| flash | `vulcan-decision-shell-v1-flash` | 0.35B | |
-| standard | `vulcan-decision-shell-v1` | 0.8B | El modelo evaluado arriba; basado en Qwen3.5-0.8B-Base |
+| mini | `vulcan-decision-shell-v1-mini` | 0.2B | |
+| flash | `vulcan-decision-shell-v1-flash` | 0.36B | |
+| standard | `vulcan-decision-shell-v1` | 0.75B | Predeterminado en la nube. El modelo evaluado arriba; basado en Qwen3.5-0.8B-Base |
 
 ## 🔒 Registros de decisiones y privacidad
 

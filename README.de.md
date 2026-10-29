@@ -54,7 +54,7 @@ Auch ein allgemeines LLM jeden Aufruf prüfen zu lassen, ist nicht ideal: Jeder 
 verbraucht Tokens, und das LLM liest dieselbe Konversation, sodass es sich von demselben Kontext überzeugen lassen
 kann, der den Agenten in die Irre geführt hat.
 
-Das Entscheidungsmodell ist ein kleines Modell (0,2B bis 0,8B), das für genau diese eine Aufgabe trainiert wurde.
+Das Entscheidungsmodell ist ein kleines Modell (0,2B bis 0,75B), das für genau diese eine Aufgabe trainiert wurde.
 Es sieht nur drei Dinge: den Projektordner, den Tool-Namen und die tatsächlichen Argumente. Die Konversation und die
 Erklärungen der KI liest es nie. Es antwortet mit einer von drei Entscheidungen: **erlauben**, **prüfen** oder
 **blockieren**. Dadurch gilt:
@@ -237,8 +237,8 @@ Antwort zu warten.
 ## 📊 Auswertung
 
 Im Oktober 2026 haben wir einen einmaligen Vergleich auf einer einzigen eingefrorenen Fragensammlung durchgeführt:
-**`vulcan-decision-shell-v1`** (0.8B) gegen zwei externe Entscheidungsdienste, JEV 1.14.0 und das
-Entscheidungsmodell von Alibaba Cloud `decision-model-preview`. Alle drei erhielten dieselbe feste englische
+**`vulcan-decision-shell-v1`** (0.75B) gegen zwei externe Entscheidungsdienste, JEV 1.14.0 und das
+Entscheidungsmodell von Alibaba Cloud Bailian `bailian-decision-preview`. Alle drei erhielten dieselbe feste englische
 Richtlinie, dieselben vollständigen Tool-Argumente, denselben Projektordner und dieselben festen
 Freigabeoptionen, ohne Aufgabenbeschreibung; es wurde die Entscheidung mit der höchsten Bewertung genommen, und
 Schwellenwerte wurden nicht angepasst.
@@ -248,7 +248,7 @@ Zuerst die Grenzen dieser Zahlen:
 - Die gelabelten Fragen stammen aus unserer eigenen Trainings- und Testsammlung, und **ein großer Teil davon sind
   Fragen, auf die wir trainiert haben**, was uns klar begünstigt;
 - Die Referenzlabels stammen von uns; sie sind keine absolute Wahrheit für die Produktion;
-- Die Zahlen gelten nur für `vulcan-decision-shell-v1`. Das Cloud-Standardmodell `vulcan-decision-shell-v1-mini` (0.2B) und `vulcan-decision-shell-v1-flash` (0.35B) verhalten sich
+- Die Zahlen gelten nur für `vulcan-decision-shell-v1`, das Cloud-Standardmodell. `vulcan-decision-shell-v1-flash` (0.36B) und `vulcan-decision-shell-v1-mini` (0.2B) verhalten sich
   anders und sind hier nicht vertreten;
 - Externe Ergebnisse spiegeln die damals verfügbaren Versionen wider. Über den Dienst-Alias von Alibaba Cloud
   können wir nicht prüfen, welche Gewichte dahinterstehen.
@@ -344,9 +344,9 @@ China-Spiegel-Downloadquelle wählen.
 
 | Größe | Modell | Parameter | Hinweise |
 | --- | --- | --- | --- |
-| mini | `vulcan-decision-shell-v1-mini` | 0.2B | Cloud-Standard |
-| flash | `vulcan-decision-shell-v1-flash` | 0.35B | |
-| standard | `vulcan-decision-shell-v1` | 0.8B | Das oben ausgewertete Modell; basiert auf Qwen3.5-0.8B-Base |
+| mini | `vulcan-decision-shell-v1-mini` | 0.2B | |
+| flash | `vulcan-decision-shell-v1-flash` | 0.36B | |
+| standard | `vulcan-decision-shell-v1` | 0.75B | Cloud-Standard. Das oben ausgewertete Modell; basiert auf Qwen3.5-0.8B-Base |
 
 ## 🔒 Entscheidungsprotokolle und Datenschutz
 

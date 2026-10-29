@@ -4,9 +4,9 @@
 
 ## 一、定位
 
-Vulcan Decision Guard 是一个独立项目，为 Vulcan Code 之外的 AI 编码宿主（DeepSeek harness、Claude Code、
-Codex 等）提供工具调用权限守卫。它使用 OpenVulcan 账号与 OpenVulcan 云端判定节点，拥有自己的配置与发布
-节奏，不依赖 Vulcan Code 仓库。
+Vulcan Decision Guard 是一个独立项目，为 DeepSeek harness（dsh）提供工具调用权限守卫。它使用 OpenVulcan
+账号与 OpenVulcan 云端判定节点，拥有自己的配置与发布节奏，不依赖 Vulcan Code 仓库。其他宿主尚未适配，调查
+结论见「七、宿主适配」。
 
 与 Vulcan Code 的关系是**参考升级**：Vulcan Code 的权限判定实现只作为参考，本仓库按需移植并自行维护；
 每次移植在提交说明中记录所参考的 Vulcan Code 提交，不建立代码依赖。
@@ -159,8 +159,8 @@ Arguments: <实际参数的紧凑 JSON，键保持原顺序>
 | 系列 | 云端模型 id | 本机发布名 | 参数量 |
 | --- | --- | --- | --- |
 | mini | `vulcan-decision-shell-v1-mini-preview` | `vulcan-decision-shell-v1-mini` | 0.2B |
-| flash | `vulcan-decision-shell-v1-flash-preview` | `vulcan-decision-shell-v1-flash` | 0.35B |
-| standard | `vulcan-decision-shell-v1-preview` | `vulcan-decision-shell-v1` | 0.8B |
+| flash | `vulcan-decision-shell-v1-flash-preview` | `vulcan-decision-shell-v1-flash` | 0.36B |
+| standard | `vulcan-decision-shell-v1-preview` | `vulcan-decision-shell-v1` | 0.75B |
 
 **本机模型包**（`src/local/models.ts`）有两种格式：
 
